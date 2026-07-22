@@ -5,7 +5,7 @@ import { OB1, OB2, OB3, OB4 } from './screens/Onboarding'
 import { Building }      from './screens/Building'
 import { Home }          from './screens/Home'
 import { ManualClaim, Claiming, Payout, ClaimRejected } from './screens/Claim'
-import { Policy, Profile } from './screens/PolicyProfile'
+import { Policy, Profile } from './screens/Policyprofile'
 import { AdminLogin, AdminDash } from './screens/Admin'
 
 const SCREENS = {
