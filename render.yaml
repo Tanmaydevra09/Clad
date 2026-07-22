@@ -1,0 +1,61 @@
+services:
+  # ── BACKEND — FastAPI (Python) ───────────────────────────────────────
+  - type: web
+    name: clad-backend
+    env: python
+    plan: free
+    rootDir: clad-backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+
+    envVars:
+      # ── Sensitive keys — Render will prompt you to fill these in ──
+      - key: ANTHROPIC_API_KEY
+        sync: false          # paste your key in Render dashboard
+
+      - key: RAZORPAY_KEY_SECRET
+        sync: false          # paste your Razorpay secret in Render dashboard
+
+      # ── Non-sensitive keys — pre-filled ──────────────────────────
+      - key: RAZORPAY_KEY_ID
+        value: rzp_test_SdtXKcSuPhPgo8
+
+      - key: AQICN_TOKEN
+        value: f01a354ce6bfcb14defbee7a1cbee54108f7a63f
+
+      - key: TOMORROW_IO_KEY
+        value: fj3dCUUP19AYByhVG3OhWgDpuF5Rnlgz
+
+      # ── CORS — set this to your frontend URL after first deploy ──
+      # e.g.  https://clad-frontend.onrender.com
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  # ── FRONTEND — React + Vite (Static Site) ────────────────────────────
+  - type: web
+    name: clad-frontend
+    env: static
+    plan: free
+    rootDir: clad-frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+
+    envVars:
+      # Automatically gets the backend's live URL — no manual step needed
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: clad-backend
+          property: hostURL
+
+    headers:
+      # Allow camera access (needed for Claude Vision photo upload)
+      - path: /*
+        name: Permissions-Policy
+        value: camera=*
+
+    routes:
+      # SPA fallback — all routes serve index.html (React Router)
+      - type: rewrite
+        source: /*
+        destination: /index.html

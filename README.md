@@ -14,8 +14,8 @@
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)
 ![LightGBM](https://img.shields.io/badge/ML-LightGBM-9B59B6?style=flat-square)
 ![R2](https://img.shields.io/badge/Model_R%C2%B2-0.92-2ecc71?style=flat-square)
-![Railway](https://img.shields.io/badge/Backend-Railway-0B0D0E?style=flat-square&logo=railway&logoColor=white)
-![Vercel](https://img.shields.io/badge/Frontend-Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
+![Render](https://img.shields.io/badge/Backend-Render-46E3B7?style=flat-square&logo=render&logoColor=white)
+![Render](https://img.shields.io/badge/Frontend-Render-46E3B7?style=flat-square&logo=render&logoColor=white)
 ![Claude](https://img.shields.io/badge/Claude_Vision-Anthropic-D4A574?style=flat-square)
 ![Razorpay](https://img.shields.io/badge/Payments-Razorpay-3395FF?style=flat-square)
 
@@ -91,7 +91,7 @@ City-wide trigger        →     3km pincode precision
 │                        CLAD FULL SYSTEM                             │
 ├──────────────────┬──────────────────────┬───────────────────────────┤
 │   REACT FRONTEND │   FASTAPI BACKEND    │   EXTERNAL SERVICES       │
-│   (Vercel)       │   (Railway)          │                           │
+│   (Render)       │   (Render)           │                           │
 │                  │                      │                           │
 │  Splash Screen   │   17 REST endpoints  │  🌦 Open-Meteo            │
 │  Onboarding x4   │   FastAPI v3.2       │     Rain + Wind + Weather │
@@ -350,7 +350,7 @@ The insurer dashboard pulls live data from 4 backend endpoints simultaneously, a
 
 ## 🔌 API Reference
 
-Base URL: `https://clad-production-531d.up.railway.app`
+Base URL: `https://clad-backend.onrender.com`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -445,8 +445,8 @@ clad/
 | **Weather** | Open-Meteo | Rain, wind, weather code |
 | **Air Quality** | AQICN | Real-time AQI, 150+ cities |
 | **Flood/Wind** | Tomorrow.io | Cyclone and flood alerts |
-| **Frontend Deploy** | Vercel | Auto-deploy from GitHub |
-| **Backend Deploy** | Railway | Python + Procfile |
+| **Frontend Deploy** | Render (Static Site) | Auto-deploy from GitHub |
+| **Backend Deploy** | Render (Web Service) | Python + render.yaml Blueprint |
 | **Persistence** | JSON file (db_state.json) | Demo-grade data store |
 
 ---
@@ -523,27 +523,41 @@ npm run dev
 
 ## 🌍 Deployment
 
-### Backend → Railway
+Both services deploy together via **Render Blueprint** — one click, both backend and frontend.
+
+### Blueprint (Recommended — deploys both at once)
 
 ```
-1. Push clad-backend/ to GitHub
-2. Railway → New Project → Deploy from GitHub
-3. Settings → Root Directory: /clad-backend
-4. Add environment variables (Railway dashboard → Variables):
-   AQICN_TOKEN, TOMORROW_IO_KEY, RAZORPAY_KEY_ID,
-   RAZORPAY_KEY_SECRET, ANTHROPIC_API_KEY, ALLOWED_ORIGINS
-5. Procfile handles the start command automatically
+1. Push the repo to GitHub (render.yaml is already at the root)
+2. Go to render.com → New → Blueprint
+3. Connect your GitHub repo
+4. Render detects render.yaml automatically
+5. Fill in the prompted secret values:
+   - ANTHROPIC_API_KEY   → your Anthropic key
+   - RAZORPAY_KEY_SECRET → your Razorpay secret
+   - ALLOWED_ORIGINS     → set to https://clad-frontend.onrender.com after frontend deploys
+6. Click "Apply" — both services deploy simultaneously
+7. VITE_API_URL is injected automatically from the backend URL
 ```
 
-### Frontend → Vercel
+### Manual Deploy (individual services)
 
+**Backend → Render Web Service**
 ```
-1. Push clad-frontend/ to GitHub
-2. Vercel → New Project → Import repo
-3. Settings → Root Directory: clad-frontend
-4. Add environment variable:
-   VITE_API_URL = https://your-railway-url.up.railway.app
-5. Deploy — live in ~60 seconds
+1. Render → New → Web Service → connect repo
+2. Root Directory: clad-backend
+3. Build Command: pip install -r requirements.txt
+4. Start Command: uvicorn app:app --host 0.0.0.0 --port $PORT
+5. Add environment variables in dashboard (see .env.example)
+```
+
+**Frontend → Render Static Site**
+```
+1. Render → New → Static Site → connect repo
+2. Root Directory: clad-frontend
+3. Build Command: npm install && npm run build
+4. Publish Directory: dist
+5. Add: VITE_API_URL = https://clad-backend.onrender.com
 ```
 
 ---
@@ -579,7 +593,7 @@ Claude Vision             PWA push notifications     Series A raise
 Razorpay sandbox          IRDAI consultation         50K workers pilot
 5 live trigger APIs       500-worker Zepto pilot
 CladScore system
-Vercel + Railway deploy
+Render deploy (Blueprint)
 ```
 
 ---

@@ -3,9 +3,10 @@ numpy
 scikit-learn
 lightgbm
 fastapi
-uvicorn
+uvicorn[standard]
 joblib
 httpx
 python-dotenv
 networkx
 pydantic
+python-multipart
