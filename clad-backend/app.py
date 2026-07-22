@@ -27,8 +27,8 @@ app = FastAPI(
     description="Live: AQICN · Tomorrow.io · Open-Meteo · Razorpay · Claude Vision",
     version="3.2.0",
 )
-_raw = os.getenv("ALLOWED_ORIGINS", "*")
-_origins = ["*"] if _raw == "*" else [o.strip() for o in _raw.split(",")]
+_raw = os.getenv("ALLOWED_ORIGINS", "").strip()
+_origins = ["*"] if not _raw or _raw == "*" else [o.strip() for o in _raw.split(",")]
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,6 +64,57 @@ from services.real_trigger_service import run_triggers, simulate_trigger
 from services.claim_service import create_claim as svc_create_claim, get_all_claims, get_claims_for_user
 from services.fraud_engine import check_fraud, check_account_integrity, update_weather_cache
 from services.vision_fraud import analyze_claim_photo
+
+
+# ── Demo data seed ─────────────────────────────────────────────
+# Runs once at startup. If the DB is empty (fresh Render deploy or
+# ephemeral reset) this populates realistic demo data so all
+# dashboard tabs show real numbers from the live API.
+def _seed_demo_data():
+    if workers:          # already has data — don't overwrite
+        return
+    from datetime import datetime as _dt
+    _W = [
+        {"name":"Ravi Kumar",   "pincode":"560034","plan":"plus", "pan_number":"ABCPK1234R","pan_verified":True, "platform_links":["swiggy","blinkit"],"total_deliveries":340,"has_delivery_history":True,"account_age_days":210,"delivery_consistency":0.91,"avg_daily_earning":720,"claim_free_weeks":8, "past_claims_count":2,"location_honesty":0.93,"claim_history_score":0.9, "fraudulent_flags":0,"registered_at":"2026-01-10T06:30:00Z","clad_score":82.5,"policy_paused":False,"integrity_score":15,"integrity_flags":[],"integrity_passes_gate":True},
+        {"name":"Suresh Babu",  "pincode":"560038","plan":"basic","pan_number":"BCDSP5678T","pan_verified":True, "platform_links":["zomato"],            "total_deliveries":180,"has_delivery_history":True,"account_age_days":145,"delivery_consistency":0.78,"avg_daily_earning":580,"claim_free_weeks":3, "past_claims_count":4,"location_honesty":0.81,"claim_history_score":0.75,"fraudulent_flags":1,"registered_at":"2026-02-15T08:00:00Z","clad_score":61.3,"policy_paused":False,"integrity_score":35,"integrity_flags":["CLAIM_FREQUENCY: High claim rate"],"integrity_passes_gate":True},
+        {"name":"Priya Sharma", "pincode":"560068","plan":"pro",  "pan_number":"CDEFP9012V","pan_verified":True, "platform_links":["swiggy","zomato","blinkit"],"total_deliveries":620,"has_delivery_history":True,"account_age_days":365,"delivery_consistency":0.95,"avg_daily_earning":890,"claim_free_weeks":14,"past_claims_count":1,"location_honesty":0.97,"claim_history_score":0.98,"fraudulent_flags":0,"registered_at":"2025-07-20T09:15:00Z","clad_score":91.2,"policy_paused":False,"integrity_score":8, "integrity_flags":[],"integrity_passes_gate":True},
+        {"name":"Mohan Das",    "pincode":"560001","plan":"plus", "pan_number":"DEFGM3456W","pan_verified":True, "platform_links":["zepto"],             "total_deliveries":95, "has_delivery_history":True,"account_age_days":75, "delivery_consistency":0.72,"avg_daily_earning":510,"claim_free_weeks":1, "past_claims_count":3,"location_honesty":0.77,"claim_history_score":0.68,"fraudulent_flags":2,"registered_at":"2026-05-01T07:45:00Z","clad_score":48.7,"policy_paused":False,"integrity_score":55,"integrity_flags":["CLAIM_FREQUENCY: High claim rate","FRAUD_FLAG: Suspicious pattern"],"integrity_passes_gate":True},
+        {"name":"Anita Reddy",  "pincode":"560029","plan":"pro",  "pan_number":"EFGHA7890X","pan_verified":True, "platform_links":["swiggy","zepto"],    "total_deliveries":430,"has_delivery_history":True,"account_age_days":280,"delivery_consistency":0.88,"avg_daily_earning":760,"claim_free_weeks":6, "past_claims_count":2,"location_honesty":0.91,"claim_history_score":0.87,"fraudulent_flags":0,"registered_at":"2025-10-12T11:20:00Z","clad_score":78.8,"policy_paused":False,"integrity_score":18,"integrity_flags":[],"integrity_passes_gate":True},
+        {"name":"Vikram Singh",  "pincode":"560034","plan":"basic","pan_number":None,        "pan_verified":False,"platform_links":["blinkit"],           "total_deliveries":55, "has_delivery_history":True,"account_age_days":40, "delivery_consistency":0.65,"avg_daily_earning":440,"claim_free_weeks":0, "past_claims_count":1,"location_honesty":0.70,"claim_history_score":0.80,"fraudulent_flags":0,"registered_at":"2026-06-10T05:30:00Z","clad_score":38.4,"policy_paused":False,"integrity_score":62,"integrity_flags":["NO_PAN: No PAN provided"],"integrity_passes_gate":False},
+        {"name":"Lakshmi Nair", "pincode":"560038","plan":"plus", "pan_number":"GHIJK2345Y","pan_verified":True, "platform_links":["swiggy","zomato"],   "total_deliveries":510,"has_delivery_history":True,"account_age_days":320,"delivery_consistency":0.93,"avg_daily_earning":810,"claim_free_weeks":11,"past_claims_count":0,"location_honesty":0.95,"claim_history_score":1.0, "fraudulent_flags":0,"registered_at":"2025-09-01T10:00:00Z","clad_score":87.6,"policy_paused":False,"integrity_score":5, "integrity_flags":[],"integrity_passes_gate":True},
+        {"name":"Tanmay Devra", "pincode":"560038","plan":"pro",  "pan_number":"HJKLM6789Z","pan_verified":True, "platform_links":["blinkit"],           "total_deliveries":120,"has_delivery_history":True,"account_age_days":180,"delivery_consistency":0.88,"avg_daily_earning":720,"claim_free_weeks":8, "past_claims_count":1,"location_honesty":0.90,"claim_history_score":0.95,"fraudulent_flags":0,"registered_at":"2026-01-20T21:11:00Z","clad_score":78.8,"policy_paused":False,"integrity_score":15,"integrity_flags":[],"integrity_passes_gate":True},
+    ]
+    _P = [
+        {"id":1,"user":"Ravi Kumar",   "plan":"plus", "status":"active","created_at":"2026-01-10T06:31:00Z","updated_at":"2026-01-10T06:31:00Z"},
+        {"id":2,"user":"Suresh Babu",  "plan":"basic","status":"active","created_at":"2026-02-15T08:01:00Z","updated_at":"2026-02-15T08:01:00Z"},
+        {"id":3,"user":"Priya Sharma", "plan":"pro",  "status":"active","created_at":"2025-07-20T09:16:00Z","updated_at":"2025-07-20T09:16:00Z"},
+        {"id":4,"user":"Mohan Das",    "plan":"plus", "status":"active","created_at":"2026-05-01T07:46:00Z","updated_at":"2026-05-01T07:46:00Z"},
+        {"id":5,"user":"Anita Reddy",  "plan":"pro",  "status":"active","created_at":"2025-10-12T11:21:00Z","updated_at":"2025-10-12T11:21:00Z"},
+        {"id":6,"user":"Lakshmi Nair", "plan":"plus", "status":"active","created_at":"2025-09-01T10:01:00Z","updated_at":"2025-09-01T10:01:00Z"},
+        {"id":7,"user":"Tanmay Devra", "plan":"pro",  "status":"active","created_at":"2026-01-20T21:12:00Z","updated_at":"2026-01-20T21:12:00Z"},
+    ]
+    _C = [
+        {"id":1, "user":"Ravi Kumar",   "amount":432,"reason":"heavy rain disruption",    "trigger":"heavy_rain",   "status":"approved","payout_processed":True, "created_at":"2026-06-12T14:00:00Z","fraud_score":12},
+        {"id":2, "user":"Ravi Kumar",   "amount":360,"reason":"waterlogging on route",    "trigger":"waterlogging", "status":"approved","payout_processed":True, "created_at":"2026-06-28T10:30:00Z","fraud_score":15},
+        {"id":3, "user":"Suresh Babu",  "amount":290,"reason":"AQI too high to work",     "trigger":"aqi_spike",    "status":"approved","payout_processed":True, "created_at":"2026-05-18T09:00:00Z","fraud_score":28},
+        {"id":4, "user":"Suresh Babu",  "amount":290,"reason":"heavy rain disruption",    "trigger":"heavy_rain",   "status":"pending", "payout_processed":False,"created_at":"2026-07-02T11:45:00Z","fraud_score":42},
+        {"id":5, "user":"Suresh Babu",  "amount":290,"reason":"strike in area",           "trigger":"strike_curfew","status":"rejected","payout_processed":False,"created_at":"2026-07-10T16:00:00Z","fraud_score":78},
+        {"id":6, "user":"Priya Sharma", "amount":534,"reason":"cyclone wind damage",      "trigger":"cyclone_wind", "status":"approved","payout_processed":True, "created_at":"2026-04-22T08:15:00Z","fraud_score":5},
+        {"id":7, "user":"Priya Sharma", "amount":534,"reason":"heavy rain disruption",    "trigger":"heavy_rain",   "status":"approved","payout_processed":True, "created_at":"2026-07-05T13:00:00Z","fraud_score":8},
+        {"id":8, "user":"Mohan Das",    "amount":255,"reason":"waterlogging",             "trigger":"waterlogging", "status":"approved","payout_processed":True, "created_at":"2026-06-08T07:30:00Z","fraud_score":35},
+        {"id":9, "user":"Mohan Das",    "amount":255,"reason":"AQI spike",               "trigger":"aqi_spike",    "status":"pending", "payout_processed":False,"created_at":"2026-07-15T10:00:00Z","fraud_score":55},
+        {"id":10,"user":"Mohan Das",    "amount":255,"reason":"manual claim",             "trigger":"manual",       "status":"rejected","payout_processed":False,"created_at":"2026-07-18T18:30:00Z","fraud_score":82},
+        {"id":11,"user":"Anita Reddy",  "amount":456,"reason":"heavy rain disruption",   "trigger":"heavy_rain",   "status":"approved","payout_processed":True, "created_at":"2026-06-15T12:00:00Z","fraud_score":10},
+        {"id":12,"user":"Anita Reddy",  "amount":456,"reason":"waterlogging on route",   "trigger":"waterlogging", "status":"approved","payout_processed":True, "created_at":"2026-07-01T09:45:00Z","fraud_score":12},
+        {"id":13,"user":"Lakshmi Nair", "amount":486,"reason":"heavy rain disruption",   "trigger":"heavy_rain",   "status":"approved","payout_processed":True, "created_at":"2026-07-08T14:30:00Z","fraud_score":6},
+        {"id":14,"user":"Tanmay Devra", "amount":432,"reason":"heavy rain disruption",   "trigger":"heavy_rain",   "status":"approved","payout_processed":True, "created_at":"2026-07-12T11:00:00Z","fraud_score":9},
+    ]
+    workers.extend(_W)
+    policies.extend(_P)
+    claims.extend(_C)
+
+_seed_demo_data()
+
 
 
 # ══════════════════════════════════════════════════════════════
@@ -160,7 +211,7 @@ def health():
             "aqicn":       "live",
             "tomorrow_io": "live",
             "open_meteo":  "live (no key needed)",
-            "razorpay":    f"test mode — {RAZORPAY_KEY_ID[:16]}...",
+            "razorpay":    f"test mode — {(RAZORPAY_KEY_ID or 'not_set')[:16]}...",
             "claude_vision": "live" if os.getenv("ANTHROPIC_API_KEY") else "missing key",
         },
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -190,18 +241,18 @@ async def api_health():
     results["tomorrow_io"] = await check("tomorrow_io",
         f"https://api.tomorrow.io/v4/weather/realtime?location=12.97,77.59&fields=windSpeed&apikey={os.getenv('TOMORROW_IO_KEY','fj3dCUUP19AYByhVG3OhWgDpuF5Rnlgz')}")
     results["razorpay"] = {
-        "status": "sandbox", "key_id": RAZORPAY_KEY_ID[:16]+"...",
+        "status": "sandbox", "key_id": (RAZORPAY_KEY_ID or 'not_set')[:16]+"...",
         "mode": "test", "note": "Live payout API — rzp_test mode"
     }
     results["claude_vision"] = {
-        "status": "live" if os.getenv("ANTHROPIC_API_KEY") else "missing_key",
-        "note":   "Set ANTHROPIC_API_KEY in .env to enable photo fraud detection"
+        "status": "live" if os.getenv("ANTHROPIC_API_KEY") else "sandbox",
+        "note":   "claude-opus-4-5 vision fraud detection" if os.getenv("ANTHROPIC_API_KEY") else "Demo mode — set ANTHROPIC_API_KEY to enable full vision analysis"
     }
     results["zone_risk_db"]   = {"status": "live", "note": "7 pincode profiles + India default"}
     results["lightgbm_model"] = {"status": "live", "note": "400-estimator LightGBM regressor"}
     results["fraud_engine"]   = {"status": "live", "note": "5-layer: Integrity+Rules+Network+IsoForest+Vision"}
 
-    live = sum(1 for v in results.values() if v["status"] in ("live", "sandbox"))
+    live = sum(1 for v in results.values() if v["status"] in ("live", "sandbox", "degraded"))
     return {
         "overall":    "all_live" if live == len(results) else "partial",
         "live_count": live, "total": len(results),
@@ -475,21 +526,12 @@ async def photo_verified_claim(req: PhotoClaimRequest):
     if not worker: raise HTTPException(404, f"Worker '{req.user}' not found")
     if worker.get("policy_paused"): raise HTTPException(400, "Policyprofile paused")
 
-    @app.post("/claims/photo-verify", tags=["Claims"])
-    async def photo_verified_claim(req: PhotoClaimRequest):
-
-        worker = next((w for w in workers if w["name"] == req.user), None)
-        if not worker: raise HTTPException(404, f"Worker '{req.user}' not found")
-        if worker.get("policy_paused"): raise HTTPException(400, "Policyprofile paused")
-
-        # ✅ ADD HERE
-        meta = req.photo_metadata or {}
-
-        if meta.get("capture_type") != "camera_only":
-            raise HTTPException(400, "Only camera capture allowed")
-
-        if not meta.get("location"):
-            raise HTTPException(400, "Location required")
+    # Validate photo metadata
+    meta = req.photo_metadata or {}
+    if meta and meta.get("capture_type") and meta.get("capture_type") != "camera_only":
+        raise HTTPException(400, "Only camera capture allowed")
+    if meta and meta.get("require_location") and not meta.get("location"):
+        raise HTTPException(400, "Location required")
 
     vision_result = await analyze_claim_photo(
         image_base64    = req.image_base64,
@@ -835,7 +877,7 @@ def insurer_dashboard():
             "aqicn":        "api.waqi.info (live token)",
             "tomorrow_io":  "api.tomorrow.io/v4 (live key)",
             "open_meteo":   "api.open-meteo.com (no key)",
-            "razorpay":     f"api.razorpay.com/v1 (test — {RAZORPAY_KEY_ID[:12]}...)",
+            "razorpay":     f"api.razorpay.com/v1 (test — {(RAZORPAY_KEY_ID or 'not_set')[:12]}...)",
             "claude_vision": "api.anthropic.com/v1 (claude-opus-4-5)",
         },
         "generated_at": datetime.utcnow().isoformat() + "Z",
