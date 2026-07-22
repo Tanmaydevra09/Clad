@@ -5,7 +5,7 @@
 # 🛡 Clad
 ### AI-Powered Parametric Income Insurance for Gig Delivery Workers
 
-**[🚀 Live App](https://clad-frontend-six.vercel.app)**
+**[🚀 Live App](https://clad-frontend.onrender.com)**
 
 <br/>
 
@@ -37,7 +37,8 @@
 
 | | URL | Status |
 |---|---|---|
-| 🌐 **Frontend App** | [clad-frontend-six.vercel.app](https://clad-frontend-six.vercel.app) | ![Live](https://img.shields.io/badge/status-live-22C55E?style=flat-square) |
+| 🌐 **Frontend App** | [clad-frontend.onrender.com](https://clad-frontend.onrender.com) | ![Live](https://img.shields.io/badge/status-live-22C55E?style=flat-square) |
+| ⚙️ **Backend API** | [clad-backend.onrender.com](https://clad-backend.onrender.com) | ![Live](https://img.shields.io/badge/status-live-22C55E?style=flat-square) |
 
 ## 📊 Pitch Deck
 
@@ -614,7 +615,7 @@ Built by Biswajeet Rout — full-stack implementation across 6 weeks covering Fa
 
 <br/>
 
-[![Live App](https://img.shields.io/badge/🚀_Live_App-clad--frontend--six.vercel.app-1A6B3A?style=for-the-badge)](https://clad-frontend-six.vercel.app)
+[![Live App](https://img.shields.io/badge/🚀_Live_App-clad--frontend.onrender.com-1A6B3A?style=for-the-badge)](https://clad-frontend.onrender.com)
 
 <br/>
 
