@@ -41,12 +41,10 @@ services:
     staticPublishPath: dist
 
     envVars:
-      # Automatically gets the backend's live URL — no manual step needed
+      # After the backend deploys, paste its full URL here:
+      # e.g. https://clad-backend.onrender.com
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: clad-backend
-          property: hostURL
+        sync: false
 
     headers:
       # Allow camera access (needed for Claude Vision photo upload)
