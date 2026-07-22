@@ -35,7 +35,6 @@ services:
   - type: web
     name: clad-frontend
     env: static
-    plan: free
     rootDir: clad-frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
