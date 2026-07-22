@@ -37,23 +37,41 @@ TOMORROW_IO_KEY = os.getenv("TOMORROW_IO_KEY",  "fj3dCUUP19AYByhVG3OhWgDpuF5Rnlg
 PINCODE_COORDS = {
     "560034": {"lat": 12.9352, "lon": 77.6245, "city": "Bangalore South"},
     "560038": {"lat": 12.9784, "lon": 77.6408, "city": "Bangalore Central"},
+    "560068": {"lat": 13.0359, "lon": 77.5970, "city": "Bangalore North"},
+    "560001": {"lat": 12.9766, "lon": 77.5713, "city": "Bangalore MG Road"},
+    "560029": {"lat": 12.9121, "lon": 77.6446, "city": "Bangalore JP Nagar"},
     "400001": {"lat": 18.9388, "lon": 72.8355, "city": "Mumbai Fort"},
+    "400070": {"lat": 19.0728, "lon": 72.8826, "city": "Mumbai Andheri"},
     "110001": {"lat": 28.6315, "lon": 77.2167, "city": "Delhi Connaught"},
+    "110092": {"lat": 28.6692, "lon": 77.3120, "city": "Delhi East"},
     "600001": {"lat": 13.0827, "lon": 80.2707, "city": "Chennai Central"},
+    "600028": {"lat": 13.0418, "lon": 80.2341, "city": "Chennai T Nagar"},
+    "603203": {"lat": 12.7828, "lon": 80.0162, "city": "Maraimalai Nagar (Chennai)"},
+    "603002": {"lat": 12.8231, "lon": 80.0444, "city": "Chengalpattu (Chennai)"},
     "700001": {"lat": 22.5726, "lon": 88.3639, "city": "Kolkata BBD Bagh"},
     "500001": {"lat": 17.3850, "lon": 78.4867, "city": "Hyderabad Old City"},
+    "411001": {"lat": 18.5204, "lon": 73.8567, "city": "Pune Shivajinagar"},
 }
 DEFAULT_COORDS = {"lat": 12.9716, "lon": 77.5946, "city": "Unknown City"}
 
 # ── Zone fallback (used only if API call fails) ────────────────
 ZONE_MOCK = {
     "400001": {"rain": 9.2, "duration": 52, "wind": 35, "aqi": 148},
+    "400070": {"rain": 8.5, "duration": 48, "wind": 30, "aqi": 155},
     "560034": {"rain": 8.1, "duration": 48, "wind": 22, "aqi": 97},
     "560038": {"rain": 5.0, "duration": 30, "wind": 18, "aqi": 89},
+    "560068": {"rain": 6.5, "duration": 38, "wind": 20, "aqi": 92},
+    "560001": {"rain": 7.0, "duration": 42, "wind": 21, "aqi": 95},
+    "560029": {"rain": 7.5, "duration": 45, "wind": 23, "aqi": 98},
     "110001": {"rain": 3.5, "duration": 25, "wind": 15, "aqi": 245},
+    "110092": {"rain": 4.0, "duration": 28, "wind": 16, "aqi": 260},
     "600001": {"rain": 6.0, "duration": 40, "wind": 25, "aqi": 110},
+    "600028": {"rain": 5.5, "duration": 35, "wind": 22, "aqi": 108},
+    "603203": {"rain": 7.2, "duration": 44, "wind": 28, "aqi": 105},
+    "603002": {"rain": 6.8, "duration": 40, "wind": 26, "aqi": 102},
     "700001": {"rain": 7.0, "duration": 45, "wind": 28, "aqi": 130},
     "500001": {"rain": 4.5, "duration": 30, "wind": 20, "aqi": 95},
+    "411001": {"rain": 5.5, "duration": 35, "wind": 24, "aqi": 88},
 }
 DEFAULT_MOCK = {"rain": 6.0, "duration": 35, "wind": 20, "aqi": 120}
 
