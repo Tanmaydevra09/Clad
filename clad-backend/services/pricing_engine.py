@@ -14,12 +14,23 @@ from data.zone_risk import ZONE_RISK_PROFILES, DEFAULT_ZONE
 from data.clad_score import compute_clad_score_simple
 from src.predict import predict
 
+# Base prices per plan tier — used as the ML anchor
+PLAN_BASE_PRICE = {
+    "basic": 29,
+    "plus":  49,
+    "pro":   79,
+}
+
 def compute_premium(user: dict) -> dict:
     # ── 1. Zone lookup ────────────────────────────────────────
     pincode = str(user.get("pincode", "560034"))
     zone    = ZONE_RISK_PROFILES.get(pincode, DEFAULT_ZONE)
 
-    # ── 2. CladScore ─────────────────────────────────────────
+    # ── 2. Plan tier — determines coverage cap & base price ──
+    plan       = str(user.get("plan", "plus")).lower()
+    base_price = PLAN_BASE_PRICE.get(plan, 49)
+
+    # ── 3. CladScore ─────────────────────────────────────────
     clad_score = compute_clad_score_simple(
         delivery_consistency_pct = float(user.get("delivery_consistency", 0.80)),
         location_honesty_pct     = float(user.get("location_honesty", 0.85)),
@@ -47,7 +58,7 @@ def compute_premium(user: dict) -> dict:
 
     # ── 4. Build ML feature vector ───────────────────────────
     month              = int(user.get("month", 4))
-    avg_daily_earning  = float(user.get("avg_daily_earning", 600))
+    avg_daily_earning  = float(user.get("avg_daily_earning", 700))  # real worker earning
     claim_free_weeks_v = int(user.get("claim_free_weeks", 0))
     past_claims        = int(user.get("past_claims_count", 0))
 
@@ -58,11 +69,11 @@ def compute_premium(user: dict) -> dict:
         weekly_prob *= 2.5
 
     model_input = {
-        "base_premium":            49,
+        "base_premium":            base_price,          # plan-specific anchor (29/49/79)
         "account_age_days":        int(user.get("account_age_days", 90)),
         "clad_score":              clad_score,
         "delivery_consistency":    float(user.get("delivery_consistency", 0.80)),
-        "avg_daily_earning":       avg_daily_earning,
+        "avg_daily_earning":       avg_daily_earning,   # real worker earning
         "claim_free_weeks":        claim_free_weeks_v,
         "past_claims_count":       past_claims,
         "is_monsoon":              is_monsoon,
@@ -92,14 +103,17 @@ def compute_premium(user: dict) -> dict:
         ml_used = False
 
     # ── 6. Calibration & safety bounds ───────────────────────
+    # Clamp relative to the chosen plan's base price so Basic never exceeds Pro
+    plan_min = max(20.0, base_price * 0.6)
+    plan_max = base_price * 2.2
     premium = raw_premium * 0.7
-    premium = round(max(20.0, min(120.0, premium)), 2)
+    premium = round(max(plan_min, min(plan_max, premium)), 2)
 
     # ── 7. Explainability breakdown ───────────────────────────
     breakdown = []
 
-    base_prem = 49
-    breakdown.append({"factor": "Base Premium (Plus plan)", "amount": base_prem, "direction": "base"})
+    plan_label = {"basic": "Basic", "plus": "Plus", "pro": "Pro"}.get(plan, "Plus")
+    breakdown.append({"factor": f"Base Premium (Clad {plan_label})", "amount": base_price, "direction": "base"})
 
     flood_adj = round(zone["flood_frequency"] * 18, 2)
     breakdown.append({"factor": f"Flood Risk — {zone.get('city', pincode)}", "amount": flood_adj, "direction": "increase"})
@@ -143,4 +157,7 @@ def compute_premium(user: dict) -> dict:
         "ml_used":           ml_used,
         "confidence":        "High" if ml_used else "Medium (actuarial fallback)",
         "model_version":     "LightGBM-v1" if ml_used else "actuarial-v1",
+        "plan":              plan,
+        "base_price":        base_price,
+        "avg_daily_earning": avg_daily_earning,
     }

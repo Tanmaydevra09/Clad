@@ -33,7 +33,20 @@ export function Building() {
         store.onPolicyCreated(pol.policy||pol); setProg(55)
 
         setIdx(2)
-        const prem = await api.getPremium({ name:store.name, month:new Date().getMonth()+1 })
+        const planKey = planKeys[store.selectedPlan]
+        const prem = await api.getPremium({
+          name:                 store.name,
+          month:                new Date().getMonth() + 1,
+          plan:                 planKey,
+          avg_daily_earning:    store.avgDailyEarning || 700,
+          account_age_days:     180,
+          delivery_consistency: 0.88,
+          location_honesty:     0.90,
+          claim_history_score:  0.95,
+          claim_free_weeks:     store.claimFreeWeeks || 0,
+          past_claims_count:    0,
+          fraudulent_flags:     0,
+        })
         store.onPremiumCalculated(prem)
         setCards({ score:prem.clad_score, grade:prem.clad_grade, premium:prem.predicted_premium, speed:prem.payout_speed })
         setProg(82)

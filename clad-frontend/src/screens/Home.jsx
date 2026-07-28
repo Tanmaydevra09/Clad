@@ -19,7 +19,7 @@ export function Home() {
   }, [name])
 
   const hour = new Date().getHours()
-  const tod  = hour<12?'Morning':hour<17?'Afternoon':'Evening'
+  const tod  = hour < 5 ? 'Night' : hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : hour < 21 ? 'Evening' : 'Night'
 
   return (
     // FIX 1: Use overflow-hidden on the outer screen so the inner scroll-body
