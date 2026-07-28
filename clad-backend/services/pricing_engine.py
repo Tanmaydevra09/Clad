@@ -10,7 +10,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from data.zone_risk import ZONE_RISK_PROFILES, DEFAULT_ZONE
+from data.dynamic_zone_risk import compute_zone_risk_live, get_zone_risk_sync, DEFAULT_ZONE
 from data.clad_score import compute_clad_score_simple
 from src.predict import predict
 
@@ -22,9 +22,9 @@ PLAN_BASE_PRICE = {
 }
 
 def compute_premium(user: dict) -> dict:
-    # ── 1. Zone lookup ────────────────────────────────────────
+    # ── 1. Zone lookup (live for any Indian pincode) ───────────────
     pincode = str(user.get("pincode", "560034"))
-    zone    = ZONE_RISK_PROFILES.get(pincode, DEFAULT_ZONE)
+    zone    = get_zone_risk_sync(pincode)
 
     # ── 2. Plan tier — determines coverage cap & base price ──
     plan       = str(user.get("plan", "plus")).lower()

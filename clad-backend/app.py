@@ -375,7 +375,8 @@ def toggle_pause(name: str):
 # ══════════════════════════════════════════════════════════════
 
 @app.post("/premium", tags=["ML Engine"])
-def get_premium(req: PremiumRequest):
+async def get_premium(req: PremiumRequest):
+    import asyncio
     data = req.dict()
     if req.name:
         w = next((w for w in workers if w["name"] == req.name), None)
@@ -384,7 +385,7 @@ def get_premium(req: PremiumRequest):
                       "claim_free_weeks","past_claims_count","location_honesty",
                       "claim_history_score","fraudulent_flags","plan"]:
                 if k in w: data.setdefault(k, w[k])
-    result = compute_premium(data)
+    result = await asyncio.to_thread(compute_premium, data)
     if req.name:
         w = next((w for w in workers if w["name"] == req.name), None)
         if w:

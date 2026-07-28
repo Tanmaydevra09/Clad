@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 from core.db import claims, workers, _save_state
 from services.pricing_service import compute_dynamic_payout
+from data.dynamic_zone_risk import compute_zone_risk_live, KNOWN_COORDS, DEFAULT_ZONE as DYN_DEFAULT
 
 # ── Load keys from .env ────────────────────────────────────────
 try:
@@ -33,26 +34,18 @@ except ImportError:
 AQICN_TOKEN     = os.getenv("AQICN_TOKEN",     "f01a354ce6bfcb14defbee7a1cbee54108f7a63f")
 TOMORROW_IO_KEY = os.getenv("TOMORROW_IO_KEY",  "fj3dCUUP19AYByhVG3OhWgDpuF5Rnlgz")
 
-# ── Pincode → lat/lon + city ───────────────────────────────────
-PINCODE_COORDS = {
-    "560034": {"lat": 12.9352, "lon": 77.6245, "city": "Bangalore South"},
-    "560038": {"lat": 12.9784, "lon": 77.6408, "city": "Bangalore Central"},
-    "560068": {"lat": 13.0359, "lon": 77.5970, "city": "Bangalore North"},
-    "560001": {"lat": 12.9766, "lon": 77.5713, "city": "Bangalore MG Road"},
-    "560029": {"lat": 12.9121, "lon": 77.6446, "city": "Bangalore JP Nagar"},
-    "400001": {"lat": 18.9388, "lon": 72.8355, "city": "Mumbai Fort"},
-    "400070": {"lat": 19.0728, "lon": 72.8826, "city": "Mumbai Andheri"},
-    "110001": {"lat": 28.6315, "lon": 77.2167, "city": "Delhi Connaught"},
-    "110092": {"lat": 28.6692, "lon": 77.3120, "city": "Delhi East"},
-    "600001": {"lat": 13.0827, "lon": 80.2707, "city": "Chennai Central"},
-    "600028": {"lat": 13.0418, "lon": 80.2341, "city": "Chennai T Nagar"},
-    "603203": {"lat": 12.7828, "lon": 80.0162, "city": "Maraimalai Nagar (Chennai)"},
-    "603002": {"lat": 12.8231, "lon": 80.0444, "city": "Chengalpattu (Chennai)"},
-    "700001": {"lat": 22.5726, "lon": 88.3639, "city": "Kolkata BBD Bagh"},
-    "500001": {"lat": 17.3850, "lon": 78.4867, "city": "Hyderabad Old City"},
-    "411001": {"lat": 18.5204, "lon": 73.8567, "city": "Pune Shivajinagar"},
-}
+# ── Pincode → lat/lon + city (fast-path; unknown → Nominatim) ─
+# Imported from dynamic_zone_risk (KNOWN_COORDS covers 25 cities)
+PINCODE_COORDS = KNOWN_COORDS
 DEFAULT_COORDS = {"lat": 12.9716, "lon": 77.5946, "city": "Unknown City"}
+
+async def _get_coords(pincode: str) -> dict:
+    """Returns coords for any pincode. Known → instant. Unknown → Nominatim."""
+    if pincode in PINCODE_COORDS:
+        return PINCODE_COORDS[pincode]
+    from data.dynamic_zone_risk import _geocode_pincode
+    result = await _geocode_pincode(pincode)
+    return result if result else DEFAULT_COORDS
 
 # ── Zone fallback (used only if API call fails) ────────────────
 ZONE_MOCK = {
@@ -80,7 +73,7 @@ DEFAULT_MOCK = {"rain": 6.0, "duration": 35, "wind": 20, "aqi": 120}
 # API 1 — OPEN-METEO  (rain + wind, no key)
 # ══════════════════════════════════════════════════════════════
 async def _fetch_open_meteo(pincode: str) -> Tuple[dict, bool]:
-    coords = PINCODE_COORDS.get(str(pincode), DEFAULT_COORDS)
+    coords = await _get_coords(pincode)
     lat, lon = coords["lat"], coords["lon"]
     url = (
         f"https://api.open-meteo.com/v1/forecast"
@@ -126,7 +119,7 @@ async def _fetch_open_meteo(pincode: str) -> Tuple[dict, bool]:
 # Response: {"status":"ok","data":{"aqi":97,"city":{"name":"..."}}}
 # ══════════════════════════════════════════════════════════════
 async def _fetch_aqicn(pincode: str) -> Tuple[dict, bool]:
-    coords = PINCODE_COORDS.get(str(pincode), DEFAULT_COORDS)
+    coords = await _get_coords(pincode)
     lat, lon = coords["lat"], coords["lon"]
     url = f"https://api.waqi.info/feed/geo:{lat};{lon}/?token={AQICN_TOKEN}"
 
@@ -172,7 +165,7 @@ async def _fetch_aqicn(pincode: str) -> Tuple[dict, bool]:
 # Endpoint: GET /v4/weather/realtime
 # ══════════════════════════════════════════════════════════════
 async def _fetch_tomorrow(pincode: str) -> Tuple[dict, bool]:
-    coords = PINCODE_COORDS.get(str(pincode), DEFAULT_COORDS)
+    coords = await _get_coords(pincode)
     lat, lon = coords["lat"], coords["lon"]
     url = (
         f"https://api.tomorrow.io/v4/weather/realtime"
@@ -270,8 +263,8 @@ async def run_triggers(pincode: str) -> dict:
     tomorrow, tomorrow_live = await _fetch_tomorrow(pincode)
     alerts                  = _fetch_civil_alerts(pincode)
 
-    from data.zone_risk import ZONE_RISK_PROFILES, DEFAULT_ZONE
-    zone = ZONE_RISK_PROFILES.get(str(pincode), DEFAULT_ZONE)
+    from data.dynamic_zone_risk import compute_zone_risk_live
+    zone = await compute_zone_risk_live(str(pincode))
 
     eligible = [w for w in workers if str(w.get("pincode", "")) == str(pincode)]
     if not eligible and workers:
@@ -393,7 +386,7 @@ async def run_triggers(pincode: str) -> dict:
     live_count = sum(1 for t in triggers_checked if t.get("is_live"))
     return {
         "pincode":          pincode,
-        "city":             PINCODE_COORDS.get(str(pincode), DEFAULT_COORDS)["city"],
+        "city":             (await _get_coords(str(pincode)))["city"],
         "checked_at":       datetime.utcnow().isoformat() + "Z",
         "weather_readings": weather,
         "aqi_readings":     aqi_data,
