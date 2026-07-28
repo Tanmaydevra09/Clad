@@ -33,16 +33,21 @@ CACHE_TTL_HOURS   = 24
 KNOWN_COORDS = {
     "560034": {"lat": 12.9352, "lon": 77.6245, "city": "Koramangala, Bangalore"},
     "560038": {"lat": 12.9784, "lon": 77.6408, "city": "Indiranagar, Bangalore"},
+    "560068": {"lat": 13.0359, "lon": 77.5970, "city": "Rajajinagar, Bangalore"},
     "560102": {"lat": 12.9116, "lon": 77.6473, "city": "HSR Layout, Bangalore"},
     "560066": {"lat": 12.9698, "lon": 77.7499, "city": "Whitefield, Bangalore"},
     "560078": {"lat": 12.9082, "lon": 77.5905, "city": "JP Nagar, Bangalore"},
     "560037": {"lat": 12.9591, "lon": 77.6974, "city": "Marathahalli, Bangalore"},
+    "560001": {"lat": 12.9766, "lon": 77.5713, "city": "Bangalore MG Road"},
+    "560029": {"lat": 12.9121, "lon": 77.6446, "city": "Bangalore JP Nagar"},
     "400001": {"lat": 18.9388, "lon": 72.8355, "city": "Mumbai Fort"},
     "400070": {"lat": 19.0728, "lon": 72.8826, "city": "Mumbai Andheri"},
     "110001": {"lat": 28.6315, "lon": 77.2167, "city": "Delhi Connaught Place"},
     "110092": {"lat": 28.6692, "lon": 77.3120, "city": "Delhi East"},
     "600001": {"lat": 13.0827, "lon": 80.2707, "city": "Chennai Central"},
     "600028": {"lat": 13.0418, "lon": 80.2341, "city": "Chennai T Nagar"},
+    "603203": {"lat": 12.7828, "lon": 80.0162, "city": "Maraimalai Nagar, Chennai"},
+    "603002": {"lat": 12.8231, "lon": 80.0444, "city": "Chengalpattu, Chennai"},
     "700001": {"lat": 22.5726, "lon": 88.3639, "city": "Kolkata BBD Bagh"},
     "500001": {"lat": 17.3850, "lon": 78.4867, "city": "Hyderabad Old City"},
     "411001": {"lat": 18.5204, "lon": 73.8567, "city": "Pune Shivajinagar"},
@@ -54,8 +59,6 @@ KNOWN_COORDS = {
     "695001": {"lat": 8.5241,  "lon": 76.9366, "city": "Thiruvananthapuram"},
     "440001": {"lat": 21.1458, "lon": 79.0882, "city": "Nagpur"},
     "160017": {"lat": 30.7333, "lon": 76.7794, "city": "Chandigarh"},
-    "560001": {"lat": 12.9766, "lon": 77.5713, "city": "Bangalore MG Road"},
-    "560029": {"lat": 12.9121, "lon": 77.6446, "city": "Bangalore JP Nagar"},
 }
 
 DEFAULT_ZONE = {
