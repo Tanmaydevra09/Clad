@@ -1,11 +1,11 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Always_Covered-No_Matter_What-111110?style=for-the-badge&labelColor=1A6B3A&color=111110" />
+<img src="https://img.shields.io/badge/Prototype-Proof_of_Concept-111110?style=for-the-badge&labelColor=7B3F00&color=111110" />
 
 # 🛡 Clad
-### AI-Powered Parametric Income Insurance for Gig Delivery Workers
+### AI-Powered Parametric Income Insurance for Gig Delivery Workers · Prototype
 
-**[🚀 Live App](https://clad-frontend.onrender.com)**
+**[🚀 Live Demo](https://clad-frontend.onrender.com)** &nbsp;|&nbsp; *Built Jul – Dec 2025 as a proof-of-concept*
 
 <br/>
 
@@ -23,30 +23,26 @@
 
 > *"Every Monday morning, 15 million gig workers open their apps.*
 > *On rainy days, they see zero orders. Zero earnings. No safety net.*
-> *Clad changes that — automatically, in under 4 seconds."*
+> *Clad is a prototype that demonstrates how parametric insurance could change that — automatically, in under 4 seconds."*
 
 <br/>
 
-**Guidewire DEVTrails 2026 · Team 4AM Club · Phase 3 Final Submission**
+**Team 4AM Club**
 
 </div>
 
 ---
 
-## 📍 Live Deployment
+## 📍 Prototype Demo Deployment
+
+> **⚠️ Prototype Notice:** This is a proof-of-concept demo, not a production insurance product. All payouts are simulated (Razorpay sandbox), data is ephemeral (JSON file), and no real insurance policies are issued.
 
 | | URL | Status |
 |---|---|---|
-| 🌐 **Frontend App** | [clad-frontend.onrender.com](https://clad-frontend.onrender.com) | ![Live](https://img.shields.io/badge/status-live-22C55E?style=flat-square) |
-| ⚙️ **Backend API** | [clad-backend.onrender.com](https://clad-backend.onrender.com) | ![Live](https://img.shields.io/badge/status-live-22C55E?style=flat-square) |
+| 🌐 **Frontend Demo** | [clad-frontend.onrender.com](https://clad-frontend.onrender.com) | ![Demo](https://img.shields.io/badge/status-demo-F59E0B?style=flat-square) |
+| ⚙️ **Backend API** | [clad-backend.onrender.com](https://clad-backend.onrender.com) | ![Demo](https://img.shields.io/badge/status-demo-F59E0B?style=flat-square) |
 
-## 📊 Pitch Deck
 
-| | Link |
-|---|---|
-| 📑 **Pitch Deck (PDF)** | [View on Google Drive](https://drive.google.com/file/d/1o2BD7xN3iwY-1bLCTZNB5x4Bo6FC6PsE/view?usp=sharing) |
-
----
 
 ## 🎯 The Problem
 
@@ -125,9 +121,8 @@ All triggers evaluate at **pincode level within a 3km radius** — never city-wi
 |---|---------|-----------|:-----------:|-------------|
 | 🌧 | **Heavy Rain** | >7.5 mm/hr sustained 45+ min | 60% daily | Open-Meteo |
 | 😷 | **AQI Spike** | AQI >200 for 3+ hours | 30–50% | AQICN |
-| 🌊 | **Waterlogging** | Zone score >0.65 + rain >6mm/hr | 50% | IMD + Zone DB |
+| 🌊 | **Waterlogging** | Zone score >0.65 + rain >6mm/hr | 50% | Zone DB + Open-Meteo |
 | 🌪 | **Cyclone/Wind** | Wind speed >60 km/h | 50% | Tomorrow.io |
-| ⚠️ | **Strike/Curfew** | Civil alert active in pincode | 60–70% | Internal signal |
 
 ### Payout Formula
 
@@ -201,7 +196,7 @@ CladScore = (C1 × 30%) + (C2 × 25%) + (C3 × 25%) + (C4 × 20%)
 | Component | Weight | What it measures |
 |-----------|:------:|-----------------|
 | **C1** Delivery Consistency | 30% | Active days, streak length, platform tenure |
-| **C2** Location Honesty | 25% | GPS consistency, zone adherence, PAN gate |
+| **C2** Location Honesty | 25% | GPS consistency, zone adherence |
 | **C3** Claim Integrity | 25% | Approval rate, fraud flags, claim-free streak |
 | **C4** Zone Risk Inverse | 20% | Flood frequency, historical disruption days |
 
@@ -227,10 +222,9 @@ CLAIM SUBMITTED
       ▼
 ┌─────────────────────────────────────────────────┐
 │  LAYER 0  🔐  Account Integrity                 │
-│  PAN format + NSDL verify                       │
+│  PAN format validation (regex only, no OTP)     │
 │  Account age < 3 days → REJECT                  │
 │  No delivery history → REJECT                   │
-│  Platform link verification                     │
 └──────────────────────┬──────────────────────────┘
                        │ PASS
                        ▼
@@ -262,12 +256,12 @@ CLAIM SUBMITTED
                        │ PASS
                        ▼
 ┌─────────────────────────────────────────────────┐
-│  LAYER 4  👁  Claude Vision API                 │
+│  LAYER 4  👁  Claude Vision API (requires key)  │
 │  Real photo vs stock image    → DETECT          │
 │  AI-generated image           → REJECT          │
 │  Weather evidence present     → VERIFY          │
-│  EXIF timing cross-check      → VALIDATE        │
 │  Scene = Indian street scene  → CONFIRM         │
+│  (Falls back to MANUAL_REVIEW if key not set)   │
 └──────────────────────┬──────────────────────────┘
                        │ ALL CLEAR
                        ▼
@@ -285,14 +279,16 @@ CLAIM SUBMITTED
 
 ---
 
-## 💳 Razorpay Payout Flow
+## 💳 Razorpay Payout Flow (Sandbox / Prototype Only)
+
+> **Prototype Note:** Razorpay is running in sandbox/test mode only. No real money moves. In this prototype, payouts are fully simulated — generated payout IDs confirm the flow works end-to-end but no actual UPI transfer occurs. Production integration would require a live Razorpay account with full KYC.
 
 ```
 Worker taps "Send to UPI"
          │
          ▼
 Step 1: POST /v1/contacts
-        { name, email, contact, type: "employee" }
+        { name, contact, type: "employee" }
          │
          ▼
 Step 2: POST /v1/fund_accounts
@@ -304,9 +300,9 @@ Step 3: POST /v1/payouts
           mode: "UPI", purpose: "payout" }
          │
          ▼
-    ₹432 credited to worker's GPay/PhonePe
-    Reference ID returned and stored
+    Payout ID generated and stored
     Worker notified on screen
+    (Live UPI transfer requires rzp_live credentials)
 ```
 
 ---
@@ -316,7 +312,7 @@ Step 3: POST /v1/payouts
 | Screen | Purpose | Key Feature |
 |--------|---------|-------------|
 | **Splash** | Role selection | Worker 🛵 or Admin 🏢 |
-| **OB1–OB4** | Onboarding | Name → PAN → Zone → Plan |
+| **OB1–OB4** | Onboarding | Name → PAN (format check only, OTP is UI-only) → Zone → Plan |
 | **Building** | ML engine running | LightGBM inference live |
 | **Home** | Coverage overview | Live trigger notification banner |
 | **ManualClaim** | File a claim | Camera + Claude Vision verify |
@@ -448,7 +444,7 @@ clad/
 | **Flood/Wind** | Tomorrow.io | Cyclone and flood alerts |
 | **Frontend Deploy** | Render (Static Site) | Auto-deploy from GitHub |
 | **Backend Deploy** | Render (Web Service) | Python + render.yaml Blueprint |
-| **Persistence** | JSON file (db_state.json) | Demo-grade data store |
+| **Persistence** | JSON file (db_state.json) | Prototype-grade data store (PostgreSQL + Redis planned for production) |
 
 ---
 
@@ -581,17 +577,17 @@ Both services deploy together via **Render Blueprint** — one click, both backe
 
 ---
 
-## 🗺 Roadmap
+## 🗺 Roadmap (from Prototype → Production)
 
 ```
-NOW ✅                    6 MONTHS                  12 MONTHS
+PROTOTYPE ✅             PRODUCTION (6 MO)          SCALE (12 MO)
 ─────────────────         ──────────────────         ──────────────────
-React frontend            PostgreSQL 15              Aadhaar eKYC
-FastAPI backend           Redis + Celery             IRDAI sandbox
-LightGBM ML engine        Real Razorpay prod         License filing
+React frontend demo       PostgreSQL 15              Aadhaar eKYC
+FastAPI backend POC       Redis + Celery queues      IRDAI sandbox
+LightGBM ML engine        Real Razorpay prod keys    Insurance license
 5-layer fraud engine      Platform webhooks          Reinsurance deal
-Claude Vision             PWA push notifications     Series A raise
-Razorpay sandbox          IRDAI consultation         50K workers pilot
+Claude Vision verify      PWA push notifications     Series A raise
+Razorpay sandbox only     IRDAI consultation         50K workers pilot
 5 live trigger APIs       500-worker Zepto pilot
 CladScore system
 Render deploy (Blueprint)
@@ -603,7 +599,7 @@ Render deploy (Blueprint)
 
 **4AM Club**
 
-Built by Biswajeet Rout — full-stack implementation across 6 weeks covering FastAPI backend, LightGBM ML engine, 5-layer fraud detection, Claude Vision integration, Razorpay payout flow, and React mobile frontend.
+Prototype built by Tanmay Devra across 6 weeks as a solo proof-of-concept — covering FastAPI backend, LightGBM ML engine, 5-layer fraud detection, Claude Vision integration, Razorpay sandbox payout flow, and React mobile frontend. Built to validate technical feasibility and demonstrate the full product vision end-to-end.
 
 > *"We're called 4AM Club because that's when Ravi starts his shift. That's when we started building too."*
 
@@ -611,14 +607,14 @@ Built by Biswajeet Rout — full-stack implementation across 6 weeks covering Fa
 
 <div align="center">
 
-**Guidewire DEVTrails 2026 · Phase 3 Final Submission**
+**Built by Team 4AM Club**
 
 <br/>
 
-[![Live App](https://img.shields.io/badge/🚀_Live_App-clad--frontend.onrender.com-1A6B3A?style=for-the-badge)](https://clad-frontend.onrender.com)
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-clad--frontend.onrender.com-7B3F00?style=for-the-badge)](https://clad-frontend.onrender.com)
 
 <br/>
 
-*Clad — Always covered. No matter what.*
+*Clad — A prototype demonstrating what "always covered" could look like.*
 
 </div>
