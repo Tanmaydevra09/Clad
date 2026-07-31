@@ -150,6 +150,23 @@ def compute_premium(user: dict) -> dict:
         nu_surcharge = round((1 - account_age / 90) * 5, 2)
         breakdown.append({"factor": "New Account Surcharge", "amount": nu_surcharge, "direction": "increase"})
 
+    # ── 8. ML reconciliation — make breakdown sum = final premium ─
+    # Breakdown items are actuarial explainability factors; the final premium
+    # comes from LightGBM × 0.7 calibration. Add an adjustment line so the
+    # numbers the user sees always add up to exactly the quoted premium.
+    if ml_used:
+        breakdown_sum = round(sum(
+            (item["amount"] if item["direction"] != "discount" else -abs(item["amount"]))
+            for item in breakdown
+        ), 2)
+        ml_adj = round(premium - breakdown_sum, 2)
+        if ml_adj != 0:
+            breakdown.append({
+                "factor":    "ML Personalization Adjustment",
+                "amount":    abs(ml_adj),
+                "direction": "increase" if ml_adj > 0 else "discount",
+            })
+
     return {
         "predicted_premium": premium,
         "clad_score":        round(clad_score, 1),
