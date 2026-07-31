@@ -17,11 +17,23 @@ def _load():
     global _model, _scaler
     if _model is None:
         import joblib
-        base        = os.path.join(os.path.dirname(__file__), "..", "models")
+
+        # Try multiple candidate paths so this works both locally and on Render.
+        # Render runs uvicorn from clad-backend/, so __file__ may resolve differently.
+        _this_dir = os.path.dirname(os.path.abspath(__file__))   # .../src/
+        _app_dir  = os.path.dirname(_this_dir)                    # .../clad-backend/
+        candidates = [
+            os.path.join(_this_dir, "models"),           # local: src/models/
+            os.path.join(_app_dir,  "src", "models"),    # Render: clad-backend/src/models/
+            os.path.join(os.getcwd(), "src", "models"),  # cwd-relative fallback
+        ]
+        base = next((p for p in candidates if os.path.exists(os.path.join(p, "premium_model.pkl"))), None)
+        if base is None:
+            checked = ", ".join(candidates)
+            raise RuntimeError(f"Model not found in any of: {checked}")
+
         model_path  = os.path.join(base, "premium_model.pkl")
         scaler_path = os.path.join(base, "scaler.pkl")
-        if not os.path.exists(model_path):
-            raise RuntimeError("Model not found. Run: python train_model.py")
         _model  = joblib.load(model_path)
         _scaler = joblib.load(scaler_path)
         # Strip feature names from scaler so it never warns
