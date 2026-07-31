@@ -88,11 +88,14 @@ def compute_premium(user: dict) -> dict:
     }
 
     # ── 5. LightGBM prediction ────────────────────────────────
+    ml_error = None
     try:
         raw_premium = predict(model_input)
         ml_used     = True
-    except RuntimeError:
-        # Model not trained yet — fall back to actuarial formula
+    except Exception as e:
+        # Fallback to actuarial — catches RuntimeError (model missing),
+        # version mismatches, import errors, etc.
+        ml_error    = f"{type(e).__name__}: {str(e)[:120]}"
         raw_premium = (
             49
             + zone["flood_frequency"] * 18
@@ -155,6 +158,7 @@ def compute_premium(user: dict) -> dict:
         "zone":              zone,
         "breakdown":         breakdown,
         "ml_used":           ml_used,
+        "ml_error":          ml_error,  # None when LightGBM succeeds; error string for debugging
         "confidence":        "High" if ml_used else "Medium (actuarial fallback)",
         "model_version":     "LightGBM-v1" if ml_used else "actuarial-v1",
         "plan":              plan,
