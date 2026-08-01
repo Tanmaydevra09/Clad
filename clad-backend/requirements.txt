@@ -1,12 +1,35 @@
+# ── Core API ──────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+httpx
+python-dotenv
+
+# ── ML + Data ─────────────────────────────────────────────────
 pandas
 numpy
 scikit-learn==1.7.2
 lightgbm
-fastapi
-uvicorn[standard]
 joblib
-httpx
-python-dotenv
 networkx
-pydantic
-python-multipart
+
+# ── MongoDB (async Motor driver) ──────────────────────────────
+motor>=3.3.0
+pymongo>=4.5.0
+
+# ── Redis (async aioredis) ─────────────────────────────────────
+redis[hiredis]>=5.0.0
+
+# ── Kafka ─────────────────────────────────────────────────────
+confluent-kafka>=2.3.0
+
+# ── Observability ─────────────────────────────────────────────
+prometheus-client>=0.19.0
+structlog>=23.0.0
+
+# ── Snowflake ETL ─────────────────────────────────────────────
+snowflake-connector-python>=3.5.0
+
+# ── Rate limiting ─────────────────────────────────────────────
+slowapi>=0.1.9

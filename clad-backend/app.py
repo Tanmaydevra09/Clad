@@ -1,7 +1,19 @@
 """
-app.py  —  Clad Insurance API v3.2
+app.py  —  Clad Insurance API v4.0
 =====================================
 Run:  uvicorn app:app --reload --port 8000
+
+V4 changes:
+  - MongoDB Atlas (Motor async) replaces JSON file persistence
+  - Transactional Outbox Pattern for Kafka event publishing
+  - Redis caching for weather/AQI/trigger results
+  - Kafka producers for claim + payout events
+  - Prometheus metrics at /metrics
+  - /health and /readiness endpoints
+  - Structured logging with correlation IDs
+  - Idempotent payout processing (fixed random key bug)
+
+All existing API contracts preserved — frontend unchanged.
 """
 import os, sys, random, base64
 sys.path.insert(0, os.path.dirname(__file__))
@@ -12,20 +24,81 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, HTTPException, Query
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
+from uuid import uuid4
 
+# ── Observability (import early so metrics are available everywhere) ──
+from observability.logging_config import configure_logging
+configure_logging()
+import logging
+logger = logging.getLogger("clad.app")
 
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 
+
+# ── Lifespan: startup + shutdown for all infrastructure ──────────
+_outbox_task = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _outbox_task
+    # ── Startup ────────────────────────────────────────────────
+    logger.info("Clad API v4.0 starting up")
+
+    # MongoDB
+    from db.mongo import init_db
+    await init_db()
+
+    # Seed from JSON if MongoDB is empty
+    from db.mongo import get_db, is_connected
+    if is_connected():
+        db = get_db()
+        worker_count = await db.workers.count_documents({})
+        if worker_count == 0:
+            from db.seed import seed_from_json
+            counts = await seed_from_json(db)
+            logger.info(f"Auto-seeded from db_state.json: {counts}")
+        else:
+            logger.info(f"MongoDB has {worker_count} workers — skipping seed")
+
+    # Redis
+    from cache.redis_client import init_redis
+    await init_redis()
+
+    # Kafka Producer
+    from kafka.producer import init_producer
+    init_producer()
+
+    # Outbox Publisher (background task)
+    from outbox.publisher import start_outbox_publisher_background
+    _outbox_task = await start_outbox_publisher_background()
+
+    logger.info("All infrastructure initialized")
+    yield
+
+    # ── Shutdown ───────────────────────────────────────────────
+    if _outbox_task:
+        _outbox_task.cancel()
+    from cache.redis_client import close_redis
+    from db.mongo import close_db
+    from kafka.producer import close_producer
+    await close_redis()
+    await close_db()
+    close_producer()
+    logger.info("Clad API shutdown complete")
+
+
 app = FastAPI(
     title="Clad — Parametric Income Insurance API",
-    description="Live: AQICN · Tomorrow.io · Open-Meteo · Razorpay · Claude Vision",
-    version="3.2.0",
+    description="MongoDB · Kafka · Redis · Snowflake · LightGBM · Claude Vision · Razorpay",
+    version="4.0.0",
+    lifespan=lifespan,
 )
 _raw = os.getenv("ALLOWED_ORIGINS", "").strip()
 _origins = ["*"] if not _raw or _raw == "*" else [o.strip() for o in _raw.split(",")]
@@ -37,6 +110,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Request ID middleware ─────────────────────────────────────
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = str(uuid4())[:8]
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 # ── Vision verify route (inline — no import path issues) ──────
 from pydantic import BaseModel as _BM
@@ -203,19 +286,75 @@ class AnalyzePhotoRequest(BaseModel):
 # ══════════════════════════════════════════════════════════════
 
 @app.get("/health", tags=["System"])
-def health():
+async def health():
+    from db.mongo import is_connected as mongo_ok
+    from cache.redis_client import is_connected as redis_ok
+    from kafka.producer import is_available as kafka_ok
+    from db.operations import get_all_workers, get_all_claims, get_all_policies
+    worker_list  = await get_all_workers()
+    claim_list   = await get_all_claims()
+    policy_list  = await get_all_policies()
     return {
-        "status": "ok", "version": "3.2.0",
-        "workers": len(workers), "policies": len(policies), "claims": len(claims),
+        "status":  "ok",
+        "version": "4.0.0",
+        "workers": len(worker_list),
+        "policies": len(policy_list),
+        "claims":  len(claim_list),
+        "infrastructure": {
+            "mongodb": "connected" if mongo_ok() else "json_fallback",
+            "redis":   "connected" if redis_ok() else "disabled",
+            "kafka":   "connected" if kafka_ok() else "disabled",
+        },
         "integrations": {
-            "aqicn":       "live",
-            "tomorrow_io": "live",
-            "open_meteo":  "live (no key needed)",
-            "razorpay":    f"test mode — {(RAZORPAY_KEY_ID or 'not_set')[:16]}...",
+            "aqicn":         "live",
+            "tomorrow_io":   "live",
+            "open_meteo":    "live (no key needed)",
+            "razorpay":      f"test mode — {(RAZORPAY_KEY_ID or 'not_set')[:16]}...",
             "claude_vision": "live" if os.getenv("ANTHROPIC_API_KEY") else "missing key",
         },
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
+
+
+@app.get("/readiness", tags=["System"])
+async def readiness():
+    """
+    Readiness probe — checks critical operational dependencies.
+    Snowflake is NOT checked here (analytics should not take down the app).
+    """
+    from db.mongo import readiness_check as mongo_check
+    from cache.redis_client import readiness_check as redis_check
+    from kafka.producer import readiness_check as kafka_check
+
+    mongo = await mongo_check()
+    redis = await redis_check()
+    kafka = await kafka_check()
+
+    # Only MongoDB is critical for readiness
+    is_ready = (mongo["status"] == "ok")
+
+    return {
+        "ready":   is_ready,
+        "checks": {
+            "mongodb": mongo,
+            "redis":   redis,
+            "kafka":   kafka,
+        },
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.get("/metrics", tags=["System"])
+async def metrics():
+    """Prometheus metrics endpoint."""
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        data = generate_latest()
+        return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+    except ImportError:
+        return {"error": "prometheus_client not installed"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/api/health", tags=["System"])
@@ -292,8 +431,9 @@ def verify_pan(req: PANRequest):
 # ══════════════════════════════════════════════════════════════
 
 @app.post("/register", tags=["Workers"])
-def register(req: RegisterRequest):
-    existing = next((w for w in workers if w["name"] == req.name), None)
+async def register(req: RegisterRequest):
+    from db.operations import get_worker_by_name, create_worker
+    existing = await get_worker_by_name(req.name)
     if existing:
         return {"status": "already_registered", "user": existing}
     user = req.dict()
@@ -304,19 +444,21 @@ def register(req: RegisterRequest):
     user["integrity_score"]       = integrity["integrity_score"]
     user["integrity_flags"]       = integrity["flags"]
     user["integrity_passes_gate"] = integrity["passes_gate"]
-    workers.append(user)
-    _save_state()
-    return {"status": "registered", "user": user, "integrity": integrity}
+    created = await create_worker(user)
+    return {"status": "registered", "user": created, "integrity": integrity}
 
 
 @app.get("/workers", tags=["Workers"])
-def list_workers():
-    return {"count": len(workers), "workers": workers}
+async def list_workers():
+    from db.operations import get_all_workers
+    all_workers = await get_all_workers()
+    return {"count": len(all_workers), "workers": all_workers}
 
 
 @app.get("/worker/{name}", tags=["Workers"])
-def get_worker(name: str):
-    w = next((w for w in workers if w["name"] == name), None)
+async def get_worker(name: str):
+    from db.operations import get_worker_by_name
+    w = await get_worker_by_name(name)
     if not w: raise HTTPException(404, f"Worker '{name}' not found")
     return w
 
@@ -326,48 +468,41 @@ def get_worker(name: str):
 # ══════════════════════════════════════════════════════════════
 
 @app.post("/policy/create", tags=["Policyprofile"])
-def create_policy(req: PolicyRequest):
-    worker = next((w for w in workers if w["name"] == req.name), None)
+async def create_policy(req: PolicyRequest):
+    from db.operations import get_worker_by_name, upsert_policy, update_worker_plan
+    worker = await get_worker_by_name(req.name)
     if not worker: raise HTTPException(404, f"'{req.name}' not registered")
-    existing = next((p for p in policies if p["user"] == req.name), None)
-    if existing:
-        existing["plan"] = req.plan
-        existing["updated_at"] = datetime.utcnow().isoformat() + "Z"
-        worker["plan"] = req.plan
-        _save_state()
-        return {"status": "policy_updated", "policy": existing}
-    policy = {"id": len(policies)+1, "user": req.name, "plan": req.plan,
-              "status": "active", "created_at": datetime.utcnow().isoformat()+"Z"}
-    policies.append(policy)
-    worker["plan"] = req.plan
-    worker["policy_paused"] = False
-    _save_state()
-    return {"status": "policy_created", "policy": policy}
+    policy  = await upsert_policy(req.name, req.plan)
+    await update_worker_plan(req.name, req.plan)
+    existed = policy.get("created_at") != policy.get("updated_at")
+    return {"status": "policy_updated" if existed else "policy_created", "policy": policy}
 
 
 @app.get("/policy", tags=["Policyprofile"])
-def get_policies():
-    return {"count": len(policies), "policies": policies}
+async def get_policies():
+    from db.operations import get_all_policies
+    all_p = await get_all_policies()
+    return {"count": len(all_p), "policies": all_p}
 
 
 @app.get("/policy/{name}", tags=["Policyprofile"])
-def get_policy(name: str):
-    p = next((p for p in policies if p["user"] == name), None)
+async def get_policy(name: str):
+    from db.operations import get_policy_by_worker
+    p = await get_policy_by_worker(name)
     if not p: raise HTTPException(404, f"No policy for '{name}'")
     return p
 
 
 @app.post("/policy/pause/{name}", tags=["Policyprofile"])
-def toggle_pause(name: str):
-    worker = next((w for w in workers if w["name"] == name), None)
+async def toggle_pause(name: str):
+    from db.operations import get_worker_by_name, toggle_policy_pause, update_policy_status
+    worker = await get_worker_by_name(name)
     if not worker: raise HTTPException(404)
-    policy = next((p for p in policies if p["user"] == name), None)
-    if not policy: raise HTTPException(404)
-    worker["policy_paused"] = not worker.get("policy_paused", False)
-    policy["status"] = "paused" if worker["policy_paused"] else "active"
-    _save_state()
-    return {"worker": name, "policy_paused": worker["policy_paused"],
-            "policy_status": policy["status"]}
+    new_paused = await toggle_policy_pause(name)
+    if new_paused is None: raise HTTPException(404)
+    status = "paused" if new_paused else "active"
+    await update_policy_status(name, status)
+    return {"worker": name, "policy_paused": new_paused, "policy_status": status}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -377,20 +512,18 @@ def toggle_pause(name: str):
 @app.post("/premium", tags=["ML Engine"])
 async def get_premium(req: PremiumRequest):
     import asyncio
+    from db.operations import get_worker_by_name, update_worker_fields
     data = req.dict()
     if req.name:
-        w = next((w for w in workers if w["name"] == req.name), None)
+        w = await get_worker_by_name(req.name)
         if w:
             for k in ["pincode","delivery_consistency","avg_daily_earning","account_age_days",
                       "claim_free_weeks","past_claims_count","location_honesty",
                       "claim_history_score","fraudulent_flags","plan"]:
                 if k in w: data.setdefault(k, w[k])
     result = await asyncio.to_thread(compute_premium, data)
-    if req.name:
-        w = next((w for w in workers if w["name"] == req.name), None)
-        if w:
-            w["clad_score"] = result["clad_score"]
-            _save_state()
+    if req.name and result.get("clad_score"):
+        await update_worker_fields(req.name, {"clad_score": result["clad_score"]})
     return result
 
 
@@ -425,25 +558,48 @@ async def simulate_trigger_ep(
 # ══════════════════════════════════════════════════════════════
 
 @app.get("/claims", tags=["Claims"])
-def list_claims():
-    return {"count": len(claims), "claims": get_all_claims()}
+async def list_claims():
+    from db.operations import get_all_claims
+    all_c = await get_all_claims()
+    return {"count": len(all_c), "claims": all_c}
 
 
 @app.get("/claims/{user}", tags=["Claims"])
-def user_claims(user: str):
-    c = get_claims_for_user(user)
+async def user_claims(user: str):
+    from db.operations import get_claims_by_worker
+    c = await get_claims_by_worker(user)
     return {"user": user, "count": len(c), "claims": c}
 
 
 @app.post("/claims/create", tags=["Claims"])
-def manual_claim(req: ClaimRequest):
-    worker = next((w for w in workers if w["name"] == req.user), None)
+async def manual_claim(req: ClaimRequest):
+    """
+    Submit a manual claim.
+
+    V4 Architecture:
+      1. Validate worker + policy in MongoDB
+      2. Run inline fraud check (photo_required path stays sync)
+      3. Write claim + outbox_event in a MongoDB transaction
+      4. Return immediately — fraud consumer processes async via Kafka
+
+    For non-Kafka mode (fallback): runs fraud sync as before.
+    """
+    from db.operations import (
+        get_worker_by_name, create_claim_doc, write_outbox_event,
+        increment_fraudulent_flags,
+    )
+    from db.mongo import is_connected, get_db
+    from observability.metrics import claims_created_total
+
+    worker = await get_worker_by_name(req.user)
     if not worker: raise HTTPException(404, f"Worker '{req.user}' not found")
     if worker.get("policy_paused"): raise HTTPException(400, "Policyprofile paused")
 
     claim_data = {"amount": req.amount, "reason": req.reason,
                   "trigger": "manual", "created_at": datetime.utcnow().isoformat()+"Z"}
-    fraud = check_fraud(
+
+    # ── Photo required check (stays synchronous — immediate user feedback) ──
+    fraud_quick = check_fraud(
         worker=worker, claim=claim_data,
         photo_submitted=req.photo_submitted,
         photo_metadata=req.photo_metadata,
@@ -451,42 +607,118 @@ def manual_claim(req: ClaimRequest):
         device_id=req.device_id,
     )
 
-    if fraud.get("photo_required") and not req.photo_submitted:
-        pending = {
-            "id": len(claims)+1, "user": req.user,
-            "amount": round(float(req.amount), 2), "reason": req.reason,
-            "status": "pending_evidence",
-            "payout_speed": "On hold — photo proof required",
-            "created_at": datetime.utcnow().isoformat()+"Z", "trigger": "manual",
-            "photo_required": True,
-        }
-        claims.append(pending)
-        _save_state()
-        return {"status": "pending_evidence", "claim": pending,
+    if fraud_quick.get("photo_required") and not req.photo_submitted:
+        claim = await create_claim_doc(
+            worker_name="", pincode=worker.get("pincode",""),
+            amount=req.amount, reason=req.reason,
+            trigger_type="manual", status="pending_evidence",
+            fraud_result=None, vision_result=None,
+            payout_speed="On hold — photo proof required",
+            review_note="Photo evidence required",
+        )
+        claim["worker_name"] = req.user
+        claim["photo_required"] = True
+        return {"status": "pending_evidence", "claim": claim,
                 "message": "Upload photo via POST /claims/photo-verify"}
 
-    if not fraud["approved"]:
-        rejected = {
-            "id": len(claims)+1, "user": req.user,
-            "amount": round(float(req.amount), 2), "reason": req.reason,
-            "status": "rejected_fraud", "fraud_check": fraud,
-            "created_at": datetime.utcnow().isoformat()+"Z", "trigger": "manual",
-        }
-        claims.append(rejected)
-        worker["fraudulent_flags"] = int(worker.get("fraudulent_flags", 0)) + 1
-        _save_state()
-        return {"status": "rejected_fraud", "claim": rejected, "fraud_check": fraud,
-                "message": f"Rejected — {fraud['risk_level']} risk. {fraud['action']}"}
+    # ── With Kafka: write claim + outbox event in one transaction ──────
+    from kafka.producer import is_available as kafka_ok
+    correlation_id = str(uuid4())
 
-    claim = svc_create_claim(req.user, req.amount, req.reason)
+    if is_connected() and kafka_ok():
+        # Transactional Outbox Pattern:
+        # claim document + outbox_event written atomically in MongoDB
+        # Fraud consumer handles fraud check async
+        db = get_db()
+        async with await db.client.start_session() as session:
+            async with session.start_transaction():
+                claim = await create_claim_doc(
+                    worker_name=req.user,
+                    pincode=str(worker.get("pincode","")),
+                    amount=req.amount,
+                    reason=req.reason,
+                    trigger_type="manual",
+                    status="pending",
+                    fraud_result=None,
+                    vision_result=None,
+                    payout_speed="",
+                    review_note="Awaiting fraud check",
+                )
+                event_payload = {
+                    "claim_id":       claim["claim_id"],
+                    "worker_name":    req.user,
+                    "pincode":        str(worker.get("pincode","")),
+                    "amount":         req.amount,
+                    "reason":         req.reason,
+                    "trigger_type":   "manual",
+                    "photo_submitted": req.photo_submitted,
+                    "photo_metadata": req.photo_metadata,
+                    "gps_trace":      req.gps_trace,
+                    "device_id":      req.device_id,
+                    "created_at":     claim.get("created_at", ""),
+                }
+                await write_outbox_event(
+                    aggregate_id   = claim["claim_id"],
+                    event_type     = "claim.created",
+                    topic          = "claim.created",
+                    correlation_id = correlation_id,
+                    payload        = event_payload,
+                    session        = session,
+                )
+        try:
+            claims_created_total.inc()
+        except Exception:
+            pass
+        return {
+            "status":         "claim_submitted",
+            "claim":          claim,
+            "processing":     "async — fraud check running via Kafka consumer",
+            "correlation_id": correlation_id,
+        }
+
+    # ── Fallback: synchronous fraud check (no Kafka / no MongoDB) ─────
+    if not fraud_quick["approved"]:
+        claim = await create_claim_doc(
+            worker_name=req.user, pincode=str(worker.get("pincode","")),
+            amount=req.amount, reason=req.reason, trigger_type="manual",
+            status="rejected_fraud",
+            fraud_result={
+                "score":        fraud_quick.get("score", 0),
+                "risk_level":   fraud_quick.get("risk_level", "HIGH"),
+                "approved":     False,
+                "layers_triggered": fraud_quick.get("layers_triggered", []),
+            },
+            vision_result=None,
+            payout_speed="", review_note=f"Rejected — {fraud_quick.get('risk_level')} risk",
+        )
+        await increment_fraudulent_flags(req.user)
+        return {"status": "rejected_fraud", "claim": claim, "fraud_check": fraud_quick,
+                "message": f"Rejected — {fraud_quick['risk_level']} risk. {fraud_quick.get('action','')}"}
+
+    clad_score = float(worker.get("clad_score") or 50)
+    if clad_score >= 85:   status, pspeed, rnote = "approved", "Instant",     "Auto-approved A+"
+    elif clad_score >= 75: status, pspeed, rnote = "approved", "2hr auto",    "Auto-approved A"
+    elif clad_score >= 50: status, pspeed, rnote = "approved", "6hr hold",    "Auto-approved B"
+    else:                  status, pspeed, rnote = "pending_review", "24hr review", "Manual review C/D"
+
+    claim = await create_claim_doc(
+        worker_name=req.user, pincode=str(worker.get("pincode","")),
+        amount=req.amount, reason=req.reason, trigger_type="manual",
+        status=status, fraud_result={
+            "score": fraud_quick.get("score",0), "risk_level": fraud_quick.get("risk_level"),
+            "approved": True, "layers_triggered": fraud_quick.get("layers_triggered",[]),
+        },
+        vision_result=None, payout_speed=pspeed, review_note=rnote,
+    )
+    try:
+        claims_created_total.inc()
+    except Exception:
+        pass
     return {
         "status": "claim_submitted", "claim": claim,
-        "fraud_check": {
-            "risk_level": fraud["risk_level"],
-            "score":      fraud["score"],
-            "approved":   True,
-            "layers":     fraud["layers_triggered"],
-        },
+        "fraud_check": {"risk_level": fraud_quick["risk_level"],
+                        "score": fraud_quick["score"], "approved": True,
+                        "layers": fraud_quick["layers_triggered"]},
     }
 
 
@@ -631,25 +863,48 @@ async def analyze_photo_only(req: AnalyzePhotoRequest):
 
 @app.post("/payout", tags=["Payouts"])
 async def process_payout(req: PayoutRequest):
-    claim = next((c for c in claims if c.get("id") == req.claim_id), None)
-    if not claim: raise HTTPException(404, f"Claim #{req.claim_id} not found")
+    """
+    Trigger a payout for an approved claim.
+    V4: Uses MongoDB payouts collection with UNIQUE(claim_id) idempotency.
+    The idempotency key is deterministic: CLAD-{claim_id} (no random suffix).
+    """
+    from db.operations import (
+        get_claim_by_id, get_worker_by_name, create_payout_record, mark_payout_processed
+    )
+    from pymongo.errors import DuplicateKeyError
+
+    # Support both old integer IDs and new string claim IDs
+    claim_id_str = str(req.claim_id)
+    claim = await get_claim_by_id(claim_id_str)
+    if not claim:
+        # Also try treating claim_id as a sequential number (legacy JSON mode)
+        from core.db import claims as _jclaims
+        raw = next((c for c in _jclaims if str(c.get("id","")) == claim_id_str), None)
+        if raw:
+            claim = raw
+            claim_id_str = raw.get("claim_id") or claim_id_str
+    if not claim: raise HTTPException(404, f"Claim '{req.claim_id}' not found")
     if claim.get("status") != "approved":
         raise HTTPException(400, f"Claim status is '{claim.get('status')}' — must be approved")
     if claim.get("payout_processed"):
         return {"status": "already_processed", "payout_id": claim.get("payout_id")}
 
-    worker = next((w for w in workers if w["name"] == req.worker_name), None)
+    worker = await get_worker_by_name(req.worker_name)
     if not worker: raise HTTPException(404, f"Worker '{req.worker_name}' not found")
 
     amount   = float(claim.get("amount", 0))
     upi_vpa  = req.upi_id or f"{req.worker_name.lower().replace(' ','.')}@upi"
     phone    = req.phone or "9999999999"
     amount_p = int(amount * 100)
+
+    # FIXED: deterministic idempotency key — no random.randint
+    idempotency_key = f"CLAD-{claim_id_str}"
+
     creds    = base64.b64encode(f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()).decode()
     headers  = {
         "Authorization":        f"Basic {creds}",
         "Content-Type":         "application/json",
-        "X-Payout-Idempotency": f"CLAD-{req.claim_id}-{req.worker_name[:4].upper()}-{random.randint(1000,9999)}",
+        "X-Payout-Idempotency": idempotency_key,   # ← FIXED: deterministic
     }
     base_url     = "https://api.razorpay.com/v1"
     contact_id   = None
@@ -662,7 +917,7 @@ async def process_payout(req: PayoutRequest):
         try:
             r1 = await client.post(f"{base_url}/contacts", headers=headers, json={
                 "name": req.worker_name, "contact": phone, "type": "employee",
-                "reference_id": f"CLAD-W-{req.claim_id}",
+                "reference_id": f"CLAD-W-{claim_id_str}",
                 "notes": {"worker_type": "gig_delivery", "platform": "Clad Insurance"},
             })
             if r1.status_code in (200, 201):
@@ -691,9 +946,9 @@ async def process_payout(req: PayoutRequest):
                     "mode":                 "UPI",
                     "purpose":              "payout",
                     "queue_if_low_balance": True,
-                    "reference_id":         f"CLAD-{req.claim_id}",
-                    "narration":            f"Clad claim #{req.claim_id} payout",
-                    "notes":                {"claim_id": str(req.claim_id), "worker": req.worker_name},
+                    "reference_id":         idempotency_key,
+                    "narration":            f"Clad claim {claim_id_str} payout",
+                    "notes":                {"claim_id": claim_id_str, "worker": req.worker_name},
                 })
                 if r3.status_code in (200, 201):
                     payout_resp = r3.json()
@@ -701,7 +956,7 @@ async def process_payout(req: PayoutRequest):
                 mode = "fallback_simulation"
 
     if mode == "fallback_simulation" or not payout_resp:
-        payout_id    = f"pout_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
+        payout_id    = f"pout_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
         contact_id   = contact_id   or f"cont_{random.randint(10000000,99999999)}"
         fund_acct_id = fund_acct_id or f"fa_{random.randint(10000000,99999999)}"
         payout_resp  = {
@@ -709,30 +964,45 @@ async def process_payout(req: PayoutRequest):
             "fund_account_id": fund_acct_id,
             "amount": amount_p, "currency": "INR",
             "status": "processed", "mode": "UPI", "purpose": "payout",
-            "reference_id": f"CLAD-{req.claim_id}",
-            "narration": f"Clad claim #{req.claim_id} payout",
+            "reference_id": idempotency_key,
+            "narration": f"Clad claim {claim_id_str} payout",
             "created_at": int(datetime.utcnow().timestamp()),
             "fee": 0, "tax": 0,
         }
 
     payout_id = payout_resp.get("id", f"pout_{random.randint(10000,99999)}")
-    claim["payout_processed"]    = True
-    claim["payout_id"]           = payout_id
-    claim["payout_upi"]          = upi_vpa
-    claim["payout_at"]           = datetime.utcnow().isoformat() + "Z"
-    claim["razorpay_contact_id"] = contact_id
-    claim["razorpay_fa_id"]      = fund_acct_id
-    _save_state()
+    razorpay_data = {
+        "contact_id":      contact_id,
+        "fund_account_id": fund_acct_id,
+        "payout_id":       payout_id,
+    }
+
+    # Write to MongoDB payouts collection (UNIQUE on claim_id = idempotency)
+    try:
+        await create_payout_record(
+            claim_id    = claim_id_str,
+            worker_name = req.worker_name,
+            amount      = amount,
+            upi_vpa     = upi_vpa,
+            razorpay_data = razorpay_data,
+            mode        = mode,
+        )
+    except DuplicateKeyError:
+        return {"status": "already_processed", "payout_id": payout_id,
+                "message": "Idempotency: payout already recorded"}
+
+    await mark_payout_processed(claim_id_str, payout_id, upi_vpa)
 
     return {
-        "status":      "payout_sent",
-        "payout_id":   payout_id,
-        "amount_inr":  amount,
-        "upi_vpa":     upi_vpa,
-        "worker":      req.worker_name,
-        "claim_id":    req.claim_id,
-        "razorpay_key": RAZORPAY_KEY_ID[:16] + "...",
-        "mode":        mode,
+        "status":         "payout_sent",
+        "payout_id":      payout_id,
+        "amount_inr":     amount,
+        "upi_vpa":        upi_vpa,
+        "worker":         req.worker_name,
+        "claim_id":       claim_id_str,
+        "idempotency_key": idempotency_key,
+        "razorpay_key":   (RAZORPAY_KEY_ID or "")[:16] + "...",
+        "mode":           mode,
         "razorpay_steps": {
             "contact_id":      contact_id,
             "fund_account_id": fund_acct_id,
@@ -747,11 +1017,12 @@ async def process_payout(req: PayoutRequest):
 # ══════════════════════════════════════════════════════════════
 
 @app.get("/dashboard/worker/{name}", tags=["Dashboards"])
-def worker_dashboard(name: str):
-    worker = next((w for w in workers if w["name"] == name), None)
+async def worker_dashboard(name: str):
+    from db.operations import get_worker_by_name, get_policy_by_worker, get_claims_by_worker
+    worker  = await get_worker_by_name(name)
     if not worker: raise HTTPException(404, f"Worker '{name}' not found")
-    policy  = next((p for p in policies if p["user"] == name), None)
-    wclaims = [c for c in claims if c.get("user") == name]
+    policy  = await get_policy_by_worker(name)
+    wclaims = await get_claims_by_worker(name)
     PLANS = {
         "basic": {"weekly_premium": 29, "weekly_cap": 800,  "payout_speed": "24hr reviewed"},
         "plus":  {"weekly_premium": 49, "weekly_cap": 1500, "payout_speed": "2hr auto"},
@@ -813,7 +1084,12 @@ def worker_dashboard(name: str):
 
 
 @app.get("/dashboard/insurer", tags=["Dashboards"])
-def insurer_dashboard():
+async def insurer_dashboard():
+    from db.operations import get_all_workers, get_all_claims, get_all_policies
+    all_workers = await get_all_workers()
+    all_claims  = await get_all_claims()
+    workers     = all_workers
+    claims      = all_claims
     approved  = [c for c in claims if c.get("status")=="approved"]
     pending   = [c for c in claims if "pending" in str(c.get("status",""))]
     rejected  = [c for c in claims if "rejected" in str(c.get("status",""))]
@@ -890,8 +1166,57 @@ def insurer_dashboard():
 # ══════════════════════════════════════════════════════════════
 
 @app.post("/admin/reset", tags=["Admin"])
-def admin_reset(confirm: str = "no"):
+async def admin_reset(confirm: str = "no"):
     if confirm != "yes":
         return {"status": "not_reset", "message": "Pass ?confirm=yes to reset"}
+    # Reset JSON fallback
     reset_db()
-    return {"status": "reset_complete"}
+    # Reset MongoDB if connected
+    from db.mongo import is_connected, get_db
+    if is_connected():
+        db = get_db()
+        await db.workers.delete_many({})
+        await db.policies.delete_many({})
+        await db.claims.delete_many({})
+        await db.payouts.delete_many({})
+        await db.outbox_events.delete_many({})
+        await db.processed_events.delete_many({})
+    return {"status": "reset_complete", "storage": "mongodb" if is_connected() else "json"}
+
+
+@app.get("/admin/dlq/{topic}", tags=["Admin"])
+async def list_dlq_events(topic: str, limit: int = 50):
+    """Inspect dead-letter queue events for a given topic."""
+    from db.mongo import is_connected, get_db
+    if not is_connected():
+        return {"error": "MongoDB not connected"}
+    db = get_db()
+    cursor = db.outbox_events.find(
+        {"status": "failed"},
+        {"_id": 0},
+        sort=[("created_at", -1)],
+        limit=limit
+    )
+    events = await cursor.to_list(length=limit)
+    return {"topic": topic, "count": len(events), "events": events}
+
+
+@app.get("/admin/outbox/stats", tags=["Admin"])
+async def outbox_stats():
+    """Outbox publisher health and backlog stats."""
+    from db.mongo import is_connected, get_db
+    if not is_connected():
+        return {"error": "MongoDB not connected"}
+    db = get_db()
+    pending   = await db.outbox_events.count_documents({"status": "pending"})
+    published = await db.outbox_events.count_documents({"status": "published"})
+    failed    = await db.outbox_events.count_documents({"status": "failed"})
+    return {
+        "outbox": {
+            "pending":   pending,
+            "published": published,
+            "failed":    failed,
+            "total":     pending + published + failed,
+        },
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }

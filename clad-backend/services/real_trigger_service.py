@@ -31,8 +31,9 @@ try:
 except ImportError:
     pass
 
-AQICN_TOKEN     = os.getenv("AQICN_TOKEN",     "f01a354ce6bfcb14defbee7a1cbee54108f7a63f")
-TOMORROW_IO_KEY = os.getenv("TOMORROW_IO_KEY",  "fj3dCUUP19AYByhVG3OhWgDpuF5Rnlgz")
+AQICN_TOKEN     = os.getenv("AQICN_TOKEN",     "")
+TOMORROW_IO_KEY = os.getenv("TOMORROW_IO_KEY",  "")
+OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY",  "")
 
 # ── Pincode → lat/lon + city (fast-path; unknown → Nominatim) ─
 # Imported from dynamic_zone_risk (KNOWN_COORDS covers 25 cities)
@@ -70,12 +71,60 @@ DEFAULT_MOCK = {"rain": 6.0, "duration": 35, "wind": 20, "aqi": 120}
 
 
 # ══════════════════════════════════════════════════════════════
-# API 1 — OPEN-METEO  (rain + wind, no key)
+# API 1 — OPENWEATHERMAP (primary) + OPEN-METEO (fallback)
+# OWM uses live radar + ground stations → real-time rain detection
+# Open-Meteo is a forecast model → lags 15–30 min, misses monsoon showers
 # ══════════════════════════════════════════════════════════════
 async def _fetch_open_meteo(pincode: str) -> Tuple[dict, bool]:
+    """
+    Primary: OpenWeatherMap Current Weather API
+      GET /data/2.5/weather — returns rain["1h"] in mm (radar-backed, real-time)
+    Fallback 1: Open-Meteo forecast model (free, no key, but lags real monsoon rain)
+    Fallback 2: Zone mock data
+    """
     coords = await _get_coords(pincode)
     lat, lon = coords["lat"], coords["lon"]
-    url = (
+
+    # ── PRIMARY: OpenWeatherMap ────────────────────────────────
+    owm_url = (
+        f"https://api.openweathermap.org/data/2.5/weather"
+        f"?lat={lat}&lon={lon}&appid={OPENWEATHER_KEY}&units=metric"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(owm_url)
+        if r.status_code == 200:
+            d    = r.json()
+            # rain["1h"] = mm of rain in last 1 hour (live radar-backed)
+            rain = float(d.get("rain", {}).get("1h", 0) or 0)
+            wind = float(d.get("wind", {}).get("speed", 0) or 0) * 3.6  # m/s → km/h
+
+            # Infer sustained duration from hourly intensity
+            # (OWM gives 1-hour total, not continuous duration)
+            if rain >= 7.5:
+                dur = 60    # intense — definitely sustained
+            elif rain >= 4.0:
+                dur = 50    # moderate-heavy, sustained
+            elif rain >= 1.5:
+                dur = 35    # light-moderate
+            else:
+                dur = 15    # drizzle / trace
+
+            weather_desc = d.get("weather", [{}])[0].get("description", "")
+            city_name    = d.get("name", coords["city"])
+            return {
+                "rain_intensity": round(rain, 1),
+                "duration":       int(dur),
+                "wind_speed":     round(wind, 1),
+                "source":         f"api.openweathermap.org (live) — {city_name}: {weather_desc}",
+                "api_url":        f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}",
+                "fetched_at":     datetime.utcnow().isoformat() + "Z",
+            }, True
+    except Exception:
+        pass
+
+    # ── FALLBACK 1: Open-Meteo forecast model ─────────────────
+    meteo_url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}"
         f"&current=precipitation,wind_speed_10m,rain"
@@ -83,7 +132,7 @@ async def _fetch_open_meteo(pincode: str) -> Tuple[dict, bool]:
     )
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(url)
+            r = await client.get(meteo_url)
         if r.status_code == 200:
             d       = r.json()
             cur     = d.get("current", {})
@@ -96,19 +145,20 @@ async def _fetch_open_meteo(pincode: str) -> Tuple[dict, bool]:
                 "rain_intensity": round(rain, 1),
                 "duration":       int(dur),
                 "wind_speed":     round(wind, 1),
-                "source":         "api.open-meteo.com (live)",
-                "api_url":        url,
+                "source":         "api.open-meteo.com (fallback — OWM unreachable)",
+                "api_url":        meteo_url,
                 "fetched_at":     datetime.utcnow().isoformat() + "Z",
             }, True
     except Exception:
         pass
 
+    # ── FALLBACK 2: Zone mock data ─────────────────────────────
     base = ZONE_MOCK.get(str(pincode), DEFAULT_MOCK)
     return {
         "rain_intensity": round(base["rain"] + random.uniform(-0.5, 0.5), 1),
         "duration":       int(base["duration"] + random.randint(-5, 5)),
         "wind_speed":     round(base["wind"] + random.uniform(-2, 2), 1),
-        "source":         "Zone fallback (Open-Meteo unreachable)",
+        "source":         "Zone fallback (all weather APIs unreachable)",
         "fetched_at":     datetime.utcnow().isoformat() + "Z",
     }, False
 

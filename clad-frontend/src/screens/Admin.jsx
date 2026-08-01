@@ -813,7 +813,7 @@ function TabApis({ health, dash }) {
 
   const badge = (key) => {
     const d = apis[key]; if (!d) return { label:'—', bg:'#F1F5F9', color:'#94A3B8' }
-    const map = { live:{label:'LIVE',bg:'#DCFCE7',color:'#16A34A'}, sandbox:{label:'SANDBOX',bg:'#FEF9C3',color:'#D97706'}, offline:{label:'OFFLINE',bg:'#FEE2E2',color:'#DC2626'}, degraded:{label:'DEGRADED',bg:'#FEF9C3',color:'#D97706'} }
+    const map = { live:{label:'LIVE',bg:'#DCFCE7',color:'#16A34A'}, sandbox:{label:'SANDBOX',bg:'#FEF9C3',color:'#D97706'}, degraded:{label:'SANDBOX',bg:'#FEF9C3',color:'#D97706'}, offline:{label:'OFFLINE',bg:'#FEE2E2',color:'#DC2626'} }
     return map[d.status] || { label:(d.status||'live').toUpperCase(), bg:'#DCFCE7', color:'#16A34A' }
   }
 
@@ -834,7 +834,7 @@ function TabApis({ health, dash }) {
     <div style={{ padding:'12px 16px', background:'#0A0D14', borderRadius:14, display:'flex', gap:9, alignItems:'center' }}>
       <div style={{ width:7, height:7, borderRadius:4, background:'#22C55E', animation:'pulse 1.4s ease-in-out infinite', flexShrink:0 }} />
       <span style={{ fontSize:12, color:'rgba(255,255,255,0.45)', fontWeight:600 }}>Deployed at </span>
-      <span style={{ fontSize:12, color:'#60A5FA', fontWeight:700 }}>clad-five.vercel.app</span>
+      <span style={{ fontSize:12, color:'#60A5FA', fontWeight:700 }}>clad-frontend-six.vercel.app</span>
     </div>
 
     <Panel title="Integration Status" icon="⚡">

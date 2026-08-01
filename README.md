@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Prototype-Proof_of_Concept-111110?style=for-the-badge&labelColor=7B3F00&color=111110" />
+<img src="https://img.shields.io/badge/v4.0-Distributed_Systems-111110?style=for-the-badge&labelColor=7B3F00&color=111110" />
 
 # 🛡 Clad
 ### AI-Powered Parametric Income Insurance for Gig Delivery Workers · Prototype
@@ -618,3 +618,305 @@ Prototype built by Tanmay Devra across 6 weeks as a solo proof-of-concept — co
 *Clad — A prototype demonstrating what "always covered" could look like.*
 
 </div>
+
+---
+
+## 🏗 V4 — Distributed Systems Architecture
+
+> **What changed in v4:** Evolved from a prototype with JSON file persistence into a production-grade distributed system. All existing API contracts, fraud engine, and ML models are **unchanged** — only the infrastructure layer was upgraded.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        CLAD v4 ARCHITECTURE                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│   React Frontend (Vite)                                               │
+│         │ HTTP                                                        │
+│         ▼                                                             │
+│   FastAPI Backend (app.py v4.0)                                       │
+│   ├── Request ID middleware (X-Request-ID header)                     │
+│   ├── Prometheus metrics middleware                                   │
+│   ├── /health  /readiness  /metrics                                  │
+│   ├── lifespan: MongoDB + Redis + Kafka startup                       │
+│   │                                                                   │
+│   ├── MongoDB (Motor async)          ← operational source of truth   │
+│   │   ├── workers / policies                                          │
+│   │   ├── claims  (UNIQUE: claim_id)                                  │
+│   │   ├── payouts (UNIQUE: claim_id + idempotency_key)                │
+│   │   ├── outbox_events              ← transactional outbox           │
+│   │   └── processed_events          ← idempotency records            │
+│   │                                                                   │
+│   ├── Redis (aioredis)               ← short-lived env cache         │
+│   │   └── weather/AQI/trigger/premium (TTL 2-10 min)                 │
+│   │                                                                   │
+│   └── Outbox Publisher (asyncio task)                                 │
+│       └── polls outbox_events → publishes to Kafka                    │
+│                                                                       │
+│   Kafka (confluent-kafka)                                             │
+│   ├── disruption.detected   (3 partitions, key=pincode)               │
+│   ├── claim.created         (6 partitions, key=claim_id)              │
+│   ├── claim.approved        (6 partitions, key=claim_id)              │
+│   ├── claim.rejected        (3 partitions)                            │
+│   ├── payout.requested      (6 partitions, key=claim_id)              │
+│   ├── payout.completed      (3 partitions)                            │
+│   └── *.dlq                 (Dead Letter Queues)                      │
+│                                                                       │
+│   Consumers (independent processes)                                   │
+│   ├── FraudConsumer                                                   │
+│   │   consumes: claim.created                                         │
+│   │   runs: 5-layer fraud engine (unchanged)                          │
+│   │   produces: claim.approved / claim.rejected                       │
+│   └── PayoutConsumer                                                  │
+│       consumes: claim.approved                                        │
+│       calls: Razorpay API (idempotent key: CLAD-{claim_id})           │
+│       produces: payout.completed                                      │
+│                                                                       │
+│   Snowflake (OLAP — analytics only)                                   │
+│   ├── ETL Pipeline: MongoDB → Snowflake (incremental, watermark)      │
+│   ├── FACT_CLAIMS / FACT_PAYOUTS / FACT_TRIGGER_EVENTS                │
+│   ├── DIM_WORKER / DIM_LOCATION / DIM_DATE / DIM_DISRUPTION           │
+│   └── Analytics views: V_CLAIMS_BY_CITY / V_MONTHLY_PAYOUTS          │
+│                                                                       │
+│   CRITICAL RULE: Snowflake failure NEVER blocks claim processing      │
+│                                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### New Files Added (v4)
+
+```
+clad-backend/
+├── db/
+│   ├── mongo.py        — Motor async client, init/shutdown hooks
+│   ├── indexes.py      — All MongoDB index definitions
+│   ├── operations.py   — Centralised CRUD (all DB calls go here)
+│   └── seed.py         — db_state.json → MongoDB migration
+├── cache/
+│   └── redis_client.py — Async Redis with cache-aside helpers
+├── kafka/
+│   ├── topics.py       — Topic name constants (never hardcoded)
+│   └── producer.py     — Standard event envelope + DLQ publishing
+├── consumers/
+│   ├── base.py         — Retry + idempotency + DLQ base class
+│   ├── fraud_consumer.py   — claim.created → 5-layer fraud engine
+│   └── payout_consumer.py  — claim.approved → Razorpay payout
+├── outbox/
+│   └── publisher.py    — Transactional outbox async publisher
+├── etl/
+│   ├── snowflake_client.py — DDL + connection management
+│   └── pipeline.py     — Incremental ETL with watermarking
+├── observability/
+│   ├── metrics.py      — All Prometheus counters/histograms
+│   └── logging_config.py — Structured JSON logging (structlog)
+└── tests/
+    └── test_idempotency.py — 13 tests, all passing
+docker-compose.yml          — Full local stack
+load_test.js                — k6 load test (3 scenarios)
+.env.example                — All env vars documented
+```
+
+### Idempotency — Three Layers
+
+| Layer | Mechanism | Code Location |
+|-------|-----------|---------------|
+| **Application** | `processed_events` collection: `(event_id, consumer_name)` UNIQUE | `db/operations.py::mark_event_processed()` |
+| **Database** | `payouts.claim_id` UNIQUE index: raises `DuplicateKeyError` on duplicate | `db/indexes.py` |
+| **External API** | Razorpay `X-Payout-Idempotency: CLAD-{claim_id}` (deterministic, no random) | `consumers/payout_consumer.py` |
+
+> **Bug fixed:** The original code used `random.randint(1000,9999)` in the Razorpay idempotency key. This meant every retry generated a **different** key, creating duplicate payouts. v4 uses a deterministic `f"CLAD-{claim_id}"`.
+
+### Transactional Outbox Pattern
+
+```
+POST /claims/create
+  │
+  ├── (with MongoDB) Start transaction
+  │     ├── INSERT claims (claim document)
+  │     └── INSERT outbox_events (pending event)
+  │   COMMIT atomically
+  │
+  └── Background outbox publisher (100ms poll):
+        ├── SELECT * FROM outbox_events WHERE status='pending'
+        ├── Publish to Kafka
+        └── UPDATE outbox_events SET status='published'
+
+If Kafka is down:  events accumulate safely in MongoDB
+When Kafka recovers:  publisher drains the backlog automatically
+```
+
+### MongoDB Index Strategy
+
+| Collection | Index | Reason |
+|-----------|-------|--------|
+| `workers` | `UNIQUE(name)` | Business key |
+| `claims` | `UNIQUE(claim_id)` | Business key |
+| `claims` | `(worker_name, created_at DESC)` | Worker claim history query |
+| `claims` | `(status, payout_processed)` | Payout queue query |
+| `payouts` | `UNIQUE(claim_id)` | **Idempotency — DB layer** |
+| `payouts` | `UNIQUE(idempotency_key)` | Razorpay dedup |
+| `outbox_events` | `UNIQUE(event_id)` + partial on `status=pending` | Publisher poll |
+| `processed_events` | `UNIQUE(event_id, consumer_name)` | **Idempotency — app layer** |
+
+### Snowflake Dimensional Model
+
+```
+                    DIM_DATE ──────────┐
+                    DIM_WORKER ────────┤
+                    DIM_LOCATION ──────┼──► FACT_CLAIMS
+                    DIM_DISRUPTION ────┘         │
+                    DIM_POLICY ────────────────────┘
+                                             │
+                                        FACT_PAYOUTS
+                                             │
+                                  FACT_TRIGGER_EVENTS
+```
+
+**ETL design:**
+- **Incremental**: only processes `updated_at > last_watermark`
+- **Idempotent**: uses Snowflake `MERGE` (not `INSERT`) — re-runnable
+- **Isolated**: Snowflake failure never propagates to API routes
+- **Watermarks**: stored in both MongoDB and Snowflake for recovery
+
+### Event Schema (Standard Envelope)
+
+Every Kafka event produced by Clad follows this schema:
+```json
+{
+  "event_id":      "uuid4",
+  "event_type":    "claim.created",
+  "event_version": 1,
+  "timestamp":     "2026-08-01T18:00:00Z",
+  "correlation_id": "uuid4",
+  "producer":      "clad-api",
+  "payload": {
+    "claim_id":    "CLM-20260801-ABCD",
+    "worker_name": "Alice",
+    "amount":      500
+  }
+}
+```
+
+### Local Development (Docker Compose)
+
+```bash
+# 1. Clone & setup
+git clone https://github.com/yourusername/clad
+cd clad
+cp .env.example .env   # fill in RAZORPAY_KEY_SECRET, ANTHROPIC_API_KEY
+
+# 2. Start all infrastructure
+docker compose up -d
+
+# 3. Verify everything is healthy
+curl http://localhost:8000/readiness
+
+# 4. Seed from existing JSON (auto-runs on first startup if MongoDB is empty)
+cd clad-backend && python3 -m db.seed
+
+# 5. Run tests
+python3 -m pytest tests/ -v
+
+# 6. Load test (requires k6)
+brew install k6
+k6 run load_test.js
+```
+
+Services available locally:
+
+| Service | URL |
+|---------|-----|
+| FastAPI API | http://localhost:8000 |
+| API Docs | http://localhost:8000/docs |
+| Prometheus metrics | http://localhost:8000/metrics |
+| Readiness probe | http://localhost:8000/readiness |
+| MongoDB | mongodb://localhost:27017 |
+| Redis | redis://localhost:6379 |
+| Kafka | localhost:9092 |
+
+### Kafka Topic Design
+
+| Topic | Partitions | Key | Consumers |
+|-------|-----------|-----|-----------|
+| `disruption.detected` | 3 | pincode | analytics |
+| `claim.created` | 6 | claim_id | `fraud-processor` |
+| `claim.approved` | 6 | claim_id | `payout-processor` |
+| `claim.rejected` | 3 | claim_id | analytics |
+| `payout.completed` | 3 | claim_id | analytics |
+| `claim.processing.dlq` | 1 | — | ops alerts |
+| `payout.processing.dlq` | 1 | — | ops alerts |
+
+### Consumer Reliability
+
+The `BaseConsumer` class provides:
+1. **Idempotency check** before processing (skip duplicates)
+2. **Exponential backoff** retry: 1s → 2s → 4s → 8s (4 attempts)
+3. **DLQ publishing** after max retries
+4. **Manual offset commit** after successful processing (at-least-once)
+5. **Prometheus metrics** per event: consumed/errors/DLQ count
+
+### New API Endpoints (v4)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Infrastructure status (MongoDB/Redis/Kafka) |
+| `GET /readiness` | Kubernetes readiness probe |
+| `GET /metrics` | Prometheus metrics (text format) |
+| `GET /admin/outbox/stats` | Outbox backlog: pending/published/failed |
+| `GET /admin/dlq/{topic}` | Inspect DLQ events |
+
+### Test Results
+
+```
+============================= test session starts ==============================
+collected 13 items
+
+tests/test_idempotency.py::TestDBLayerIdempotency::test_duplicate_payout_raises_duplicate_key_error PASSED
+tests/test_idempotency.py::TestDBLayerIdempotency::test_idempotency_key_is_deterministic         PASSED
+tests/test_idempotency.py::TestDBLayerIdempotency::test_old_buggy_key_was_non_deterministic      PASSED
+tests/test_idempotency.py::TestAppLayerIdempotency::test_mark_event_processed_returns_false_on_duplicate PASSED
+tests/test_idempotency.py::TestAppLayerIdempotency::test_is_event_processed_returns_true_for_existing   PASSED
+tests/test_idempotency.py::TestClaimPayoutLifecycle::test_claim_id_format                        PASSED
+tests/test_idempotency.py::TestClaimPayoutLifecycle::test_payout_blocked_if_claim_not_approved   PASSED
+tests/test_idempotency.py::TestClaimPayoutLifecycle::test_outbox_event_has_required_fields       PASSED
+tests/test_idempotency.py::TestClaimPayoutLifecycle::test_worker_document_flattening             PASSED
+tests/test_idempotency.py::TestFraudEngineIntegrity::test_fraud_engine_returns_expected_keys     PASSED
+tests/test_idempotency.py::TestFraudEngineIntegrity::test_fraud_engine_rejects_high_fraud_score  PASSED
+tests/test_idempotency.py::TestETLIdempotency::test_date_key_is_stable                          PASSED
+tests/test_idempotency.py::TestETLIdempotency::test_score_to_risk_segment                       PASSED
+
+========================= 13 passed in 4.54s ==================================
+```
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MONGO_URI` | Yes | MongoDB connection string |
+| `MONGO_DB_NAME` | No | Database name (default: `clad_insurance`) |
+| `REDIS_URL` | No | Redis connection (caching disabled if unset) |
+| `KAFKA_BROKERS` | No | Kafka brokers (events via outbox if unset) |
+| `KAFKA_SASL_USERNAME` | No | For Upstash/cloud Kafka |
+| `KAFKA_SASL_PASSWORD` | No | For Upstash/cloud Kafka |
+| `SNOWFLAKE_ACCOUNT` | No | ETL disabled if unset |
+| `SNOWFLAKE_USER` | No | Snowflake username |
+| `SNOWFLAKE_PASSWORD` | No | Snowflake password |
+| `RAZORPAY_KEY_ID` | Yes | Razorpay API key |
+| `RAZORPAY_KEY_SECRET` | Yes | Razorpay secret |
+| `ANTHROPIC_API_KEY` | Yes | Claude Vision key |
+| `AQICN_TOKEN` | Yes | AQI API token |
+| `TOMORROW_IO_KEY` | Yes | Tomorrow.io weather key |
+
+### Graceful Degradation
+
+The system is designed to work at reduced capacity if any non-critical service is unavailable:
+
+| Service Down | Impact |
+|--------------|--------|
+| Redis | Cache misses → slower weather/AQI responses |
+| Kafka | Claims processed synchronously (no async fraud consumer) |
+| Snowflake | ETL paused, analytics stale — **core claims unaffected** |
+| Outbox publisher | Events queue in MongoDB, publish on recovery |
+
+MongoDB is the **only critical dependency**. If MongoDB is down, the app falls back to JSON file persistence automatically.

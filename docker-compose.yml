@@ -1,0 +1,239 @@
+version: "3.9"
+
+# ── Clad Insurance Platform — Local Development Stack ─────────────────────
+# Start everything:    docker compose up -d
+# Stop everything:     docker compose down
+# Wipe all volumes:    docker compose down -v
+#
+# Services:
+#   mongodb   — operational database (Motor async driver)
+#   redis     — environment cache (weather/AQI/trigger results)
+#   kafka     — event streaming (claim.created → fraud → payout)
+#   zookeeper — Kafka dependency
+#   api       — FastAPI backend (auto-reloads on code changes)
+
+services:
+
+  # ── MongoDB ────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: clad_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    environment:
+      MONGO_INITDB_DATABASE: clad_insurance
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: clad_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save 60 1
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── ZooKeeper (Kafka dependency) ───────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: clad_zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka ──────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: clad_kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168         # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824    # 1 GB
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Kafka Topic Setup ──────────────────────────────────────────────────────
+  kafka-setup:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: clad_kafka_setup
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      bash -c "
+        echo 'Creating Clad Kafka topics...'
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic disruption.detected --partitions 3 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic claim.created --partitions 6 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic claim.approved --partitions 6 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic claim.rejected --partitions 3 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic payout.requested --partitions 6 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic payout.completed --partitions 3 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic claim.processing.dlq --partitions 1 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic payout.processing.dlq --partitions 1 --replication-factor 1 &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092
+          --topic analytics.processing.dlq --partitions 1 --replication-factor 1 &&
+        echo 'All topics created.'
+        kafka-topics --list --bootstrap-server kafka:29092
+      "
+
+  # ── FastAPI Backend ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./clad-backend
+      dockerfile: Dockerfile
+    container_name: clad_api
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./clad-backend:/app                 # live-reload for development
+    environment:
+      # MongoDB
+      MONGO_URI:        mongodb://mongodb:27017
+      MONGO_DB_NAME:    clad_insurance
+      # Redis
+      REDIS_URL:        redis://redis:6379/0
+      # Kafka
+      KAFKA_BROKERS:    kafka:29092
+      # API keys (override with real values in .env)
+      RAZORPAY_KEY_ID:  ${RAZORPAY_KEY_ID:-rzp_test_SdtXKcSuPhPgo8}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      ANTHROPIC_API_KEY:   ${ANTHROPIC_API_KEY:-}
+      AQICN_TOKEN:         ${AQICN_TOKEN:-f01a354ce6bfcb14defbee7a1cbee54108f7a63f}
+      TOMORROW_IO_KEY:     ${TOMORROW_IO_KEY:-fj3dCUUP19AYByhVG3OhWgDpuF5Rnlgz}
+      # Snowflake (optional — ETL disabled if not set)
+      SNOWFLAKE_ACCOUNT:   ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_USER:      ${SNOWFLAKE_USER:-}
+      SNOWFLAKE_PASSWORD:  ${SNOWFLAKE_PASSWORD:-}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE:-CLAD_ETL_WH}
+      SNOWFLAKE_DATABASE:  ${SNOWFLAKE_DATABASE:-CLAD_DB}
+      SNOWFLAKE_SCHEMA:    ${SNOWFLAKE_SCHEMA:-ANALYTICS}
+      # App config
+      ALLOWED_ORIGINS: "*"
+      LOG_LEVEL:       INFO
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Fraud Consumer ─────────────────────────────────────────────────────────
+  fraud-consumer:
+    build:
+      context: ./clad-backend
+      dockerfile: Dockerfile
+    container_name: clad_fraud_consumer
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./clad-backend:/app
+    environment:
+      MONGO_URI:     mongodb://mongodb:27017
+      MONGO_DB_NAME: clad_insurance
+      REDIS_URL:     redis://redis:6379/0
+      KAFKA_BROKERS: kafka:29092
+      LOG_LEVEL:     INFO
+    command: python -m consumers.fraud_consumer
+
+  # ── Payout Consumer ────────────────────────────────────────────────────────
+  payout-consumer:
+    build:
+      context: ./clad-backend
+      dockerfile: Dockerfile
+    container_name: clad_payout_consumer
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./clad-backend:/app
+    environment:
+      MONGO_URI:          mongodb://mongodb:27017
+      MONGO_DB_NAME:      clad_insurance
+      KAFKA_BROKERS:      kafka:29092
+      RAZORPAY_KEY_ID:    ${RAZORPAY_KEY_ID:-rzp_test_SdtXKcSuPhPgo8}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      LOG_LEVEL:          INFO
+    command: python -m consumers.payout_consumer
+
+volumes:
+  mongodb_data:
+  mongodb_config:
+  redis_data:
+  kafka_data:
+
+networks:
+  default:
+    name: clad_network

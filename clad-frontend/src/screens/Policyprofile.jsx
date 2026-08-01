@@ -115,7 +115,7 @@ setTimeout(() => {
             </div>
           </div>
           <div className="pbar" style={{ height:6, borderRadius:3 }}>
-            <div className="pfill" style={{ width:`${cladScore}%`, background:`linear-gradient(90deg,${scoreColor(cladScore)},${scoreColor(cladScore)}aa)`, borderRadius:3 }} />
+            <div className="pfill" style={{ width:`${cladScore}%`, background:scoreColor(cladScore), borderRadius:3 }} />
           </div>
         </div>
 
@@ -206,7 +206,7 @@ export function Profile() {
             <div style={{ fontSize:16, fontWeight:800, color:'var(--t1)', marginBottom:3 }}>CladScore · {scoreLabel(cladScore)}</div>
             <div style={{ fontSize:12, color:'var(--t3)', fontWeight:600, marginBottom:8 }}>Grade {cladGrade} · {cfg.label}</div>
             <div className="pbar" style={{ height:6, borderRadius:3 }}>
-              <div className="pfill" style={{ width:`${cladScore}%`, background:`linear-gradient(90deg,${scoreColor(cladScore)},${scoreColor(cladScore)}bb)`, borderRadius:3 }} />
+              <div className="pfill" style={{ width:`${cladScore}%`, background:scoreColor(cladScore), borderRadius:3 }} />
             </div>
           </div>
         </div>
