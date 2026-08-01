@@ -28,7 +28,7 @@ _kafka_available = False
 
 def _get_kafka_config() -> dict:
     """Build confluent-kafka producer config from environment."""
-    brokers = os.getenv("KAFKA_BROKERS", "localhost:9092")
+    brokers = os.getenv("KAFKA_BROKERS", "")
     config  = {
         "bootstrap.servers": brokers,
         "client.id":         "clad-api-producer",
@@ -37,6 +37,7 @@ def _get_kafka_config() -> dict:
         "retry.backoff.ms":  500,
         "compression.type":  "gzip",
         "linger.ms":         5,            # small batching window
+        "log_level":         3,            # suppress C library noise (3=WARNING)
     }
     # Upstash / cloud Kafka: add SASL/SSL config
     if os.getenv("KAFKA_SASL_USERNAME"):
@@ -52,12 +53,19 @@ def _get_kafka_config() -> dict:
 def init_producer() -> None:
     """Initialize the Kafka producer. Call once at startup."""
     global _producer, _kafka_available
+
+    brokers = os.getenv("KAFKA_BROKERS", "")
+    if not brokers:
+        logger.info("KAFKA_BROKERS not set — Kafka disabled (outbox will queue events)")
+        _kafka_available = False
+        return
+
     try:
         from confluent_kafka import Producer
         config = _get_kafka_config()
         _producer = Producer(config)
         _kafka_available = True
-        logger.info(f"Kafka producer initialized: {config['bootstrap.servers']}")
+        logger.info(f"Kafka producer initialized: {brokers}")
     except ImportError:
         logger.warning("confluent-kafka not installed — Kafka disabled")
         _kafka_available = False
