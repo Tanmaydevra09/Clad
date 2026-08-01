@@ -55,12 +55,12 @@ async def lifespan(app: FastAPI):
     from db.mongo import init_db
     await init_db()
 
-    # Seed from JSON if MongoDB is empty
+    # Seed from JSON if MongoDB has fewer workers than expected
     from db.mongo import get_db, is_connected
     if is_connected():
         db = get_db()
         worker_count = await db.workers.count_documents({})
-        if worker_count == 0:
+        if worker_count < 5:   # < 5 means not fully seeded (handles stray test workers)
             from db.seed import seed_from_json
             counts = await seed_from_json(db)
             logger.info(f"Auto-seeded from db_state.json: {counts}")
