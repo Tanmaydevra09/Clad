@@ -98,7 +98,7 @@ async def init_db() -> None:
 async def close_db() -> None:
     """Close the Motor client. Call at FastAPI shutdown."""
     global _client, _db
-    if _client:
+    if _client is not None:
         _client.close()
         _client = None
         _db     = None
@@ -119,28 +119,28 @@ def is_connected() -> bool:
 # Returns None if not connected (callers must handle gracefully)
 
 def workers_col():
-    return _db[WORKERS] if _db else None
+    return _db[WORKERS] if _db is not None else None
 
 def policies_col():
-    return _db[POLICIES] if _db else None
+    return _db[POLICIES] if _db is not None else None
 
 def claims_col():
-    return _db[CLAIMS] if _db else None
+    return _db[CLAIMS] if _db is not None else None
 
 def payouts_col():
-    return _db[PAYOUTS] if _db else None
+    return _db[PAYOUTS] if _db is not None else None
 
 def trigger_events_col():
-    return _db[TRIGGER_EVENTS] if _db else None
+    return _db[TRIGGER_EVENTS] if _db is not None else None
 
 def outbox_events_col():
-    return _db[OUTBOX_EVENTS] if _db else None
+    return _db[OUTBOX_EVENTS] if _db is not None else None
 
 def processed_events_col():
-    return _db[PROCESSED_EVENTS] if _db else None
+    return _db[PROCESSED_EVENTS] if _db is not None else None
 
 def etl_checkpoints_col():
-    return _db[ETL_CHECKPOINTS] if _db else None
+    return _db[ETL_CHECKPOINTS] if _db is not None else None
 
 
 async def readiness_check() -> dict:

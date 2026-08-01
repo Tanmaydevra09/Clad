@@ -78,7 +78,7 @@ async def run_outbox_publisher() -> None:
                     )
                     from db.mongo import outbox_events_col
                     col = outbox_events_col()
-                    if col:
+                    if col is not None:
                         await col.update_one(
                             {"event_id": event_id},
                             {"$set": {"status": "failed"}}
@@ -95,7 +95,7 @@ async def run_outbox_publisher() -> None:
                     from kafka.producer import _producer
                     import json
 
-                    if _producer:
+                    if _producer is not None:
                         value_bytes = json.dumps(payload, default=str).encode("utf-8")
                         key_bytes   = str(key).encode("utf-8")
 

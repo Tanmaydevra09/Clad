@@ -68,7 +68,7 @@ def init_producer() -> None:
 
 def close_producer() -> None:
     global _producer
-    if _producer:
+    if _producer is not None:
         _producer.flush(timeout=5)
         _producer = None
 
